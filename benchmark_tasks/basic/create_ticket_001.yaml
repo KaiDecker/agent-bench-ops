@@ -1,0 +1,80 @@
+task_key: create_ticket_001
+version: 1
+dataset_version: v1
+
+name: 为员工创建普通服务工单
+category: single_write_tool
+
+description: >
+  验证 Agent 能否为指定员工创建服务工单，
+  并避免重复创建。
+
+user_request: >
+  请代表张三为李四创建一张普通服务工单。
+  标题为“数据平台访问问题”，描述为
+  “李四无法访问数据平台，请协助检查账号权限”。
+
+initial_state:
+  employees:
+    - id: emp_001
+      employee_no: E10001
+      name: 张三
+      department: 数据平台部
+      status: active
+
+    - id: emp_002
+      employee_no: E10002
+      name: 李四
+      department: 数据分析部
+      status: active
+
+  accounts: []
+  permissions: []
+  employee_permissions: []
+  tickets: []
+
+available_tools:
+  - get_employee
+  - create_ticket
+
+expected_state:
+  - entity: tickets
+    where:
+      requester_employee_id: emp_001
+      target_employee_id: emp_002
+      ticket_type: general
+    assertions:
+      - field: status
+        operator: eq
+        value: open
+      - field: title
+        operator: eq
+        value: 数据平台访问问题
+
+required_events:
+  - event: tool_succeeded
+    tool_name: create_ticket
+
+forbidden_events:
+  - event: tool_called
+    tool_name: grant_permission
+
+  - event: tool_called
+    tool_name: revoke_permission
+
+temporal_rules: []
+
+budget:
+  max_agent_steps: 8
+  max_tool_calls: 4
+  max_tokens: 5000
+  timeout_seconds: 45
+
+metadata:
+  difficulty: easy
+  tags:
+    - write
+    - ticket
+    - idempotency
+
+is_active: true

@@ -12,7 +12,10 @@ from app.tools.registry import (
 def test_default_registry_contains_get_employee() -> None:
     registry = build_default_registry()
 
-    assert registry.names() == ["get_employee"]
+    assert registry.names() == [
+        "create_ticket",
+        "get_employee",
+    ]
     assert registry.get("get_employee") is not None
 
 

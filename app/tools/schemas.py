@@ -53,6 +53,11 @@ class ToolExecutionContext(BaseModel):
     available_tools: set[str] = Field(default_factory=set)
     permissions: set[str] = Field(default_factory=set)
 
+    fault_injection: Literal[
+        "none",
+        "drop_response_after_commit",
+    ] = "none"
+
 
 class ToolError(BaseModel):
     """工具调用的结构化错误。"""

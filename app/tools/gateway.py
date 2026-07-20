@@ -188,13 +188,19 @@ class ToolGateway:
 
         try:
             async with asyncio.timeout(definition.metadata.timeout_seconds):
-                raw_result = await definition.handler(
-                    session,
-                    validated_arguments,
-                    context,
-                )
+                async with session.begin():
+                    raw_result = await definition.handler(
+                        session,
+                        validated_arguments,
+                        context,
+                    )
 
                 validated_result = definition.result_model.model_validate(raw_result)
+
+            # 离开 session.begin() 后，业务事务已经提交。
+            # 此时模拟响应在返回调用方前丢失。
+            if context.fault_injection == "drop_response_after_commit":
+                raise TimeoutError("Injected response loss after transaction commit")
 
         except TimeoutError:
             response = self._error_response(
@@ -202,7 +208,10 @@ class ToolGateway:
                 status="timed_out",
                 started_at=started_at,
                 code="tool_timeout",
-                message=(f"Tool execution exceeded {definition.metadata.timeout_seconds} seconds."),
+                message=(
+                    "Tool execution completed or timed out, "
+                    "but no definitive response was received."
+                ),
             )
 
         except ToolBusinessError as exc:
@@ -273,7 +282,7 @@ class ToolGateway:
         elif (
             response.status == "timed_out"
             and definition is not None
-            and not (definition.metadata.read_only or definition.metadata.is_idempotent)
+            and not definition.metadata.read_only
         ):
             persisted_status = "unknown"
 
