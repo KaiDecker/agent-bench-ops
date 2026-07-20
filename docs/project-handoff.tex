@@ -28,6 +28,46 @@
 \definecolor{commentcolor}{RGB}{90,120,90}
 \definecolor{stringcolor}{RGB}{150,70,70}
 
+% listings does not include a built-in PowerShell or JSON lexer in all
+% TeX Live distributions, so define them locally for portable compilation.
+\lstdefinelanguage{PowerShell}{
+  sensitive=false,
+  morekeywords={
+    begin,break,catch,class,continue,data,define,do,dynamicparam,else,
+    elseif,end,exit,filter,finally,for,foreach,from,function,if,in,param,
+    process,return,switch,throw,trap,try,until,using,var,while,workflow,
+    Write-Host,Write-Output,Where-Object,ForEach-Object,Select-Object,
+    Get-ChildItem,Get-Content,Set-Content,Copy-Item,New-Item,Remove-Item
+  },
+  morecomment=[l]{\#},
+  morestring=[b]",
+  morestring=[b]'
+}
+
+\lstdefinelanguage{JSON}{
+  sensitive=true,
+  morestring=[b]",
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  literate=
+   *{0}{{{\color{keywordcolor}0}}}{1}
+    {1}{{{\color{keywordcolor}1}}}{1}
+    {2}{{{\color{keywordcolor}2}}}{1}
+    {3}{{{\color{keywordcolor}3}}}{1}
+    {4}{{{\color{keywordcolor}4}}}{1}
+    {5}{{{\color{keywordcolor}5}}}{1}
+    {6}{{{\color{keywordcolor}6}}}{1}
+    {7}{{{\color{keywordcolor}7}}}{1}
+    {8}{{{\color{keywordcolor}8}}}{1}
+    {9}{{{\color{keywordcolor}9}}}{1}
+    {:}{{{\color{black}:}}}{1}
+    {,}{{{\color{black},}}}{1}
+    {\{}{{{\color{black}\{}}}{1}
+    {\}}{{{\color{black}\}}}}{1}
+    {[}{{{\color{black}[}}}{1}
+    {]}{{{\color{black}]}}}{1}
+}
+
 \lstdefinestyle{agentbench}{
   backgroundcolor=\color{codebg},
   frame=single,
@@ -49,6 +89,7 @@
 }
 \lstset{style=agentbench}
 
+\setlength{\headheight}{14pt}
 \pagestyle{fancy}
 \fancyhf{}
 \lhead{AgentBenchOps}
@@ -97,7 +138,7 @@
 
 当前默认工具注册表包含：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 create_ticket
 get_account
 get_employee
@@ -194,7 +235,7 @@ Redis & \texttt{redis:7.4-alpine} \\
 
 主要依赖：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 fastapi 0.139.2
 sqlalchemy 2.0.51
 asyncpg 0.31.0
@@ -211,20 +252,20 @@ httpx
 
 项目约束：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 requires-python = ">=3.13,<3.14"
 \end{lstlisting}
 
 激活环境并安装：
 
-\begin{lstlisting}[language=powershell]
+\begin{lstlisting}[language=PowerShell]
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 \end{lstlisting}
 
 测试必须优先使用：
 
-\begin{lstlisting}[language=powershell]
+\begin{lstlisting}[language=PowerShell]
 python -m pytest
 \end{lstlisting}
 
@@ -235,7 +276,7 @@ python -m pytest
 
 当前主要目录：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 app/
   __init__.py
   config.py
@@ -353,7 +394,7 @@ tests/
 
 常用命令：
 
-\begin{lstlisting}[language=powershell]
+\begin{lstlisting}[language=PowerShell]
 docker compose up -d
 docker compose ps
 docker exec agentbench-postgres psql -U agentbench -d agentbench -c "SELECT 1;"
@@ -368,7 +409,7 @@ docker exec agentbench-redis redis-cli PING
 
 \texttt{app/config.py} 使用 Pydantic Settings，主要配置：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 app_name
 env
 debug
@@ -403,7 +444,7 @@ sql_echo
 
 健康接口：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 GET /health/live
 GET /health/ready
 \end{lstlisting}
@@ -476,7 +517,7 @@ GET /health/ready
 
 第一份迁移：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 d289cb2313aa create core business tables
 \end{lstlisting}
 
@@ -493,7 +534,7 @@ d289cb2313aa create core business tables
 
 唯一约束：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 (task_key, version)
 \end{lstlisting}
 
@@ -512,7 +553,7 @@ Token、延迟、错误和时间字段。运行内步骤序号唯一。
 
 工具操作账本，当前关键字段：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 id
 operation_id
 run_id
@@ -541,14 +582,14 @@ finished_at
 
 关键唯一约束：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 (run_id, idempotency_key)
 operation_id
 \end{lstlisting}
 
 状态包含：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 prepared
 running
 succeeded
@@ -569,7 +610,7 @@ cancelled
 
 第二份迁移：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 fff6ae231429
 \end{lstlisting}
 
@@ -592,7 +633,7 @@ fff6ae231429
 
 \texttt{app/benchmark/schemas.py} 目前包括：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 TaskBudget
 EmployeeSeed
 AccountSeed
@@ -636,7 +677,7 @@ Repository upsert 时必须序列化：
 
 导入命令：
 
-\begin{lstlisting}[language=powershell]
+\begin{lstlisting}[language=PowerShell]
 python scripts/import_benchmark_tasks.py
 \end{lstlisting}
 
@@ -646,7 +687,7 @@ python scripts/import_benchmark_tasks.py
 
 文件：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 benchmark_tasks/basic/employee_lookup_001.yaml
 \end{lstlisting}
 
@@ -667,7 +708,7 @@ benchmark_tasks/basic/employee_lookup_001.yaml
 
 文件：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 benchmark_tasks/basic/create_ticket_001.yaml
 \end{lstlisting}
 
@@ -688,7 +729,7 @@ benchmark_tasks/basic/create_ticket_001.yaml
 
 \texttt{app/benchmark/reset.py} 提供：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 reset_business_state(session, state)
 capture_business_state(session)
 normalize_initial_state(state)
@@ -696,7 +737,7 @@ normalize_initial_state(state)
 
 重置顺序：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 DELETE tickets
 DELETE employee_permissions
 DELETE accounts
@@ -716,7 +757,7 @@ FLUSH
 
 脚本：
 
-\begin{lstlisting}[language=powershell]
+\begin{lstlisting}[language=PowerShell]
 python scripts/reset_business_state.py `
   --task-key employee_lookup_001 `
   --version 1
@@ -741,7 +782,7 @@ python scripts/reset_business_state.py `
 
 \texttt{app/tools/schemas.py} 主要对象：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 ToolMetadata
 ToolExecutionContext
 ToolError
@@ -753,7 +794,7 @@ ToolHandler
 
 当前 \texttt{ToolMetadata} 关键字段：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 name
 description
 risk_level
@@ -767,7 +808,7 @@ external_reference_path
 
 当前 \texttt{ToolExecutionContext} 关键字段：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 run_id
 step_id
 operation_id
@@ -792,13 +833,13 @@ fault_injection
 
 文件：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 app/tools/implementations/employees.py
 \end{lstlisting}
 
 支持且只能提供一个查询条件：
 
-\begin{lstlisting}[language=json]
+\begin{lstlisting}[language=JSON]
 {"employee_id": "emp_001"}
 {"employee_no": "E10001"}
 {"name": "张三"}
@@ -806,7 +847,7 @@ app/tools/implementations/employees.py
 
 错误码：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 employee_not_found
 employee_ambiguous
 invalid_arguments
@@ -814,7 +855,7 @@ invalid_arguments
 
 元数据：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 required_permissions = {"employee.read"}
 risk_level = low
 read_only = true
@@ -837,7 +878,7 @@ timeout_seconds = 3
 
 调用顺序：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 registered?
 -> allowed by benchmark?
 -> permissions satisfied?
@@ -895,7 +936,7 @@ INSERT ... ON CONFLICT DO NOTHING
 
 并依赖唯一约束：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 (run_id, idempotency_key)
 \end{lstlisting}
 
@@ -913,7 +954,7 @@ INSERT ... ON CONFLICT DO NOTHING
 
 \subsection{已验证结果}
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 调用两次
 数据库只有一条 tool_operations
 第二次 replayed = true
@@ -940,13 +981,13 @@ async with asyncio.timeout(timeout_seconds):
 
 故障模式：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 drop_response_after_commit
 \end{lstlisting}
 
 正确顺序：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 handler execution
 -> result validation
 -> transaction commit
@@ -984,7 +1025,7 @@ and not definition.metadata.read_only
 
 \texttt{tickets.source\_operation\_id} 唯一保存：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 tool_operations.operation_id
 -> tickets.source_operation_id
 \end{lstlisting}
@@ -1005,13 +1046,13 @@ source_operation_id=context.operation_id
 
 文件：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 app/tools/recovery.py
 \end{lstlisting}
 
 主要对象：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 RecoveryResolution
 RecoveryResponse
 RecoveryRegistry
@@ -1039,13 +1080,13 @@ recover_create_ticket
 
 执行：
 
-\begin{lstlisting}[language=powershell]
+\begin{lstlisting}[language=PowerShell]
 python scripts/demo_unknown_recovery.py
 \end{lstlisting}
 
 实际关键结果：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 first_response.status = timed_out
 first_response.operation_id = op_339185010b0543d0850e35abc6e2ca46
 
@@ -1071,26 +1112,26 @@ ledger.recovery_count = 1
 
 文件：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 app/tools/implementations/accounts.py
 \end{lstlisting}
 
 查询条件二选一：
 
-\begin{lstlisting}[language=json]
+\begin{lstlisting}[language=JSON]
 {"employee_id": "emp_001"}
 {"username": "zhangsan"}
 \end{lstlisting}
 
 权限：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 account.read
 \end{lstlisting}
 
 错误码：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 account_not_found
 account_ambiguous
 invalid_arguments
@@ -1100,13 +1141,13 @@ invalid_arguments
 
 文件：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 app/tools/implementations/permissions.py
 \end{lstlisting}
 
 输入：
 
-\begin{lstlisting}[language=json]
+\begin{lstlisting}[language=JSON]
 {
   "employee_id": "emp_001",
   "include_revoked": false
@@ -1119,7 +1160,7 @@ app/tools/implementations/permissions.py
 
 权限：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 permission.read
 \end{lstlisting}
 
@@ -1127,19 +1168,19 @@ permission.read
 
 位于：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 app/tools/implementations/tickets.py
 \end{lstlisting}
 
 输入：
 
-\begin{lstlisting}[language=json]
+\begin{lstlisting}[language=JSON]
 {"ticket_id": "ticket_..."}
 \end{lstlisting}
 
 权限：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 ticket.read
 \end{lstlisting}
 
@@ -1161,7 +1202,7 @@ ticket.read
 
 \subsection{阶段 4E-1 最新成功输出摘要}
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 run_id = 7c60b971-dd5e-48cb-beb2-6ba8fd8effd7
 
 get_account:
@@ -1193,7 +1234,7 @@ get_ticket:
 
 常用完整检查：
 
-\begin{lstlisting}[language=powershell]
+\begin{lstlisting}[language=PowerShell]
 ruff check app tests scripts --fix
 ruff format app tests scripts
 ruff check app tests scripts
@@ -1202,7 +1243,7 @@ python -m pytest
 
 数据库迁移检查：
 
-\begin{lstlisting}[language=powershell]
+\begin{lstlisting}[language=PowerShell]
 python -m alembic current
 python -m alembic heads
 python -m alembic upgrade head
@@ -1210,7 +1251,7 @@ python -m alembic upgrade head
 
 重置和演示：
 
-\begin{lstlisting}[language=powershell]
+\begin{lstlisting}[language=PowerShell]
 python scripts/import_benchmark_tasks.py
 
 python scripts/reset_business_state.py `
@@ -1250,7 +1291,7 @@ python scripts/demo_read_business_tools.py
 当前回放响应的 \texttt{latency\_ms} 使用原操作执行延迟。例如原调用为
 27ms，幂等回放仍返回 27ms。后续可观测性阶段建议拆分：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 execution_latency_ms
 replay_latency_ms
 \end{lstlisting}
@@ -1261,7 +1302,7 @@ replay_latency_ms
 
 部分演示脚本手动更新：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 AgentRun.total_tool_calls
 AgentRun.status
 AgentRun.finished_at
@@ -1275,7 +1316,7 @@ AgentRun.finished_at
 
 实现第一个更新型写工具：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 update_ticket
 \end{lstlisting}
 
@@ -1296,7 +1337,7 @@ update_ticket
 
 \subsection{建议输入模式}
 
-\begin{lstlisting}[language=json]
+\begin{lstlisting}[language=JSON]
 {
   "ticket_id": "ticket_001",
   "expected_version": 1,
@@ -1309,7 +1350,7 @@ update_ticket
 
 \subsection{建议错误码}
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 ticket_not_found
 ticket_version_conflict
 no_ticket_changes
@@ -1341,7 +1382,7 @@ RETURNING ...
 \texttt{source\_operation\_id}。更稳健的方案是新建
 \texttt{ticket\_mutations}：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 id
 ticket_id
 operation_id unique
@@ -1397,7 +1438,7 @@ created_at
 
 命令：
 
-\begin{lstlisting}[language=powershell]
+\begin{lstlisting}[language=PowerShell]
 cd E:\Working\agent-bench-ops
 .\.venv\Scripts\Activate.ps1
 
@@ -1420,7 +1461,7 @@ python scripts/demo_read_business_tools.py
 
 新助手需要重点确认：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 Current completed stage: 4E-1
 Next stage: 4E-2 update_ticket
 Default registered tools: 5
@@ -1432,7 +1473,7 @@ Latest read business tools demo: passed
 
 之前建议过的提交信息：
 
-\begin{lstlisting}[language={}]
+\begin{lstlisting}
 feat: add core business schema
 feat: add runtime and evaluation schema
 feat: add benchmark state reset
@@ -1443,7 +1484,7 @@ feat: recover unknown tool operations
 
 当前阶段可提交：
 
-\begin{lstlisting}[language=powershell]
+\begin{lstlisting}[language=PowerShell]
 git add .
 git commit -m "feat: add business read tools"
 \end{lstlisting}
@@ -1452,7 +1493,7 @@ git commit -m "feat: add business read tools"
 
 本文件使用 \texttt{ctexart}，推荐使用 XeLaTeX：
 
-\begin{lstlisting}[language=powershell]
+\begin{lstlisting}[language=PowerShell]
 xelatex agentbenchops_handoff.tex
 xelatex agentbenchops_handoff.tex
 \end{lstlisting}
