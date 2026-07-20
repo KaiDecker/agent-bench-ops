@@ -82,6 +82,28 @@ class CreateTicketResult(BaseModel):
     ticket: TicketResult
 
 
+class GetTicketArguments(BaseModel):
+    """查询工单工具的输入参数。"""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
+
+    ticket_id: str = Field(
+        min_length=1,
+        max_length=64,
+    )
+
+
+class GetTicketResult(BaseModel):
+    """查询工单工具的输出。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ticket: TicketResult
+
+
 def ticket_to_result(ticket: Ticket) -> CreateTicketResult:
     """将 Ticket ORM 对象转换为工具输出。"""
 
@@ -98,6 +120,31 @@ def ticket_to_result(ticket: Ticket) -> CreateTicketResult:
             version=ticket.version,
         )
     )
+
+
+async def get_ticket(
+    session: AsyncSession,
+    arguments: GetTicketArguments,
+    context: ToolExecutionContext,
+) -> GetTicketResult:
+    """根据工单 ID 查询一张工单。"""
+
+    del context
+
+    result = await session.execute(select(Ticket).where(Ticket.id == arguments.ticket_id))
+
+    ticket = result.scalar_one_or_none()
+
+    if ticket is None:
+        raise ToolBusinessError(
+            code="ticket_not_found",
+            message="The requested ticket does not exist.",
+            details={
+                "ticket_id": arguments.ticket_id,
+            },
+        )
+
+    return GetTicketResult(ticket=ticket_to_result(ticket).ticket)
 
 
 async def create_ticket(
@@ -180,4 +227,20 @@ CREATE_TICKET_TOOL = ToolDefinition(
     arguments_model=CreateTicketArguments,
     result_model=CreateTicketResult,
     handler=create_ticket,
+)
+
+GET_TICKET_TOOL = ToolDefinition(
+    metadata=ToolMetadata(
+        name="get_ticket",
+        description="Query one service ticket by ticket ID.",
+        risk_level="low",
+        required_permissions={"ticket.read"},
+        requires_approval=False,
+        is_idempotent=True,
+        read_only=True,
+        timeout_seconds=3.0,
+    ),
+    arguments_model=GetTicketArguments,
+    result_model=GetTicketResult,
+    handler=get_ticket,
 )

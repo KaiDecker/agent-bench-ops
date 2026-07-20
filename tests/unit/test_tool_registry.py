@@ -9,14 +9,23 @@ from app.tools.registry import (
 )
 
 
-def test_default_registry_contains_get_employee() -> None:
+def test_default_registry_contains_expected_tools() -> None:
     registry = build_default_registry()
 
     assert registry.names() == [
         "create_ticket",
+        "get_account",
         "get_employee",
+        "get_ticket",
+        "list_employee_permissions",
     ]
-    assert registry.get("get_employee") is not None
+
+
+def test_registry_can_get_each_default_tool() -> None:
+    registry = build_default_registry()
+
+    for tool_name in registry.names():
+        assert registry.get(tool_name) is not None
 
 
 def test_registry_rejects_duplicate_tool() -> None:

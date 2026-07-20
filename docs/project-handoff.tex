@@ -1,0 +1,1485 @@
+
+\documentclass[11pt,a4paper]{ctexart}
+
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+\usepackage{titlesec}
+\usepackage{parskip}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!55!black,
+  urlcolor=blue!65!black,
+  pdftitle={AgentBenchOps 项目交接与恢复手册},
+  pdfauthor={AgentBenchOps}
+}
+
+\definecolor{codebg}{RGB}{247,248,250}
+\definecolor{codeframe}{RGB}{220,223,228}
+\definecolor{keywordcolor}{RGB}{48,86,145}
+\definecolor{commentcolor}{RGB}{90,120,90}
+\definecolor{stringcolor}{RGB}{150,70,70}
+
+\lstdefinestyle{agentbench}{
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  breakatwhitespace=false,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  tabsize=4,
+  keywordstyle=\color{keywordcolor}\bfseries,
+  commentstyle=\color{commentcolor},
+  stringstyle=\color{stringcolor},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  xleftmargin=1.5em,
+  framexleftmargin=1em
+}
+\lstset{style=agentbench}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{AgentBenchOps}
+\rhead{项目交接与恢复手册}
+\cfoot{第 \thepage\ 页 / 共 \pageref{LastPage} 页}
+
+\titleformat{\section}{\Large\bfseries}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.8em}{}
+
+\title{\textbf{AgentBenchOps 项目交接与恢复手册}\\
+\large Tool-Calling Agent 评测与可靠性平台}
+\author{项目状态快照}
+\date{2026-07-20}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+\section{本文档用途}
+
+本文档用于在聊天记录丢失、切换会话或更换协作者后，快速恢复
+\texttt{AgentBenchOps} 项目的完整上下文。它记录：
+
+\begin{itemize}[leftmargin=2em]
+  \item 项目目标、技术栈和关键设计决策；
+  \item 已完成阶段、涉及文件、执行命令和验收结果；
+  \item 数据库表、Benchmark 任务、工具协议、幂等与恢复机制；
+  \item 已出现并修复的问题；
+  \item 当前项目进度、下一阶段以及后续路线图。
+\end{itemize}
+
+\textbf{重要原则：}代码仓库中的源代码和 Alembic 迁移是最终事实来源；
+本文档是恢复上下文、解释设计和指导后续工作的交接材料。
+
+\section{当前状态摘要}
+
+\subsection{当前阶段}
+
+截至 2026-07-20，项目已完成：
+
+\begin{center}
+\textbf{阶段 4E-1：扩展只读业务工具}
+\end{center}
+
+当前默认工具注册表包含：
+
+\begin{lstlisting}[language={}]
+create_ticket
+get_account
+get_employee
+get_ticket
+list_employee_permissions
+\end{lstlisting}
+
+下一阶段是：
+
+\begin{center}
+\textbf{阶段 4E-2：update\_ticket（乐观锁、幂等更新和未知状态恢复）}
+\end{center}
+
+MVP 完成度约为 \textbf{55\%}。可靠性基础层已经建立，尚未正式接入 LangGraph Agent。
+
+\subsection{最新验收结果}
+
+最新执行命令：
+
+\begin{lstlisting}[language=bash]
+python scripts/demo_read_business_tools.py
+\end{lstlisting}
+
+验收结果：
+
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{get\_account} 成功，返回 \texttt{account\_001}，用户名
+        \texttt{zhangsan}，状态 \texttt{active}；
+  \item \texttt{list\_employee\_permissions} 成功，员工存在且当前权限数量为 0；
+  \item \texttt{create\_ticket} 成功，创建
+        \texttt{ticket\_3b65e31088164810b8a102e0}；
+  \item \texttt{get\_ticket} 成功，读取到同一个 ticket ID；
+  \item 四次调用均生成独立的 \texttt{operation\_id}；
+  \item 返回结果、权限检查、工具范围检查和数据库访问均正常。
+\end{itemize}
+
+因此，\textbf{阶段 4E-1 已通过}。
+
+\section{项目目标与范围}
+
+\subsection{总体目标}
+
+构建一个面向 Tool-Calling Agent 的评测与运行平台，核心能力包括：
+
+\begin{itemize}[leftmargin=2em]
+  \item FastAPI 运行接口；
+  \item LangGraph Agent 执行图；
+  \item PostgreSQL 业务状态、运行记录、步骤、工具账本和评测结果；
+  \item Redis 缓存、锁或后续恢复协调；
+  \item MCP 兼容工具接入；
+  \item OpenTelemetry / Langfuse 可观测性；
+  \item Benchmark YAML 数据集和可重复状态重置；
+  \item State Oracle 与 Trace Oracle；
+  \item 权限、审批、故障注入、恢复、安全和统计实验；
+  \item 最终至少 100 个 Benchmark 任务。
+\end{itemize}
+
+\subsection{MVP 业务域}
+
+MVP 使用一个企业账号、权限和服务工单系统作为模拟业务域：
+
+\begin{itemize}[leftmargin=2em]
+  \item 员工 \texttt{employees}；
+  \item 账号 \texttt{accounts}；
+  \item 权限定义 \texttt{permissions}；
+  \item 员工权限关系 \texttt{employee\_permissions}；
+  \item 服务工单 \texttt{tickets}。
+\end{itemize}
+
+典型任务包括查询员工、查询账号、检查权限、创建工单、更新工单、
+申请或撤销权限、账号恢复以及审批流程。
+
+\section{开发环境}
+
+\subsection{本地环境}
+
+\begin{longtable}{>{\bfseries}p{4cm}p{9cm}}
+\toprule
+项目 & 当前配置 \\
+\midrule
+操作系统 & Windows，使用 VS Code；WSL2 Ubuntu 已安装 \\
+Git & 2.51 \\
+Python & 3.13.14 \\
+虚拟环境 & 项目根目录下的 \texttt{.venv} \\
+Docker & 29.6.1 \\
+Docker Compose & v5.3 \\
+PostgreSQL & \texttt{postgres:16-alpine} \\
+Redis & \texttt{redis:7.4-alpine} \\
+网络说明 & Docker Hub 拉取曾因直连 IPv6 失败，开启 Clash Verge 代理后恢复 \\
+\bottomrule
+\end{longtable}
+
+\subsection{Python 依赖}
+
+主要依赖：
+
+\begin{lstlisting}[language={}]
+fastapi 0.139.2
+sqlalchemy 2.0.51
+asyncpg 0.31.0
+redis 7.4.1
+pydantic-settings
+alembic
+uvicorn
+PyYAML
+pytest 9.1.1
+pytest-asyncio 1.4.0
+ruff 0.15.22
+httpx
+\end{lstlisting}
+
+项目约束：
+
+\begin{lstlisting}[language={}]
+requires-python = ">=3.13,<3.14"
+\end{lstlisting}
+
+激活环境并安装：
+
+\begin{lstlisting}[language=powershell]
+.\.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+\end{lstlisting}
+
+测试必须优先使用：
+
+\begin{lstlisting}[language=powershell]
+python -m pytest
+\end{lstlisting}
+
+曾出现 \texttt{ModuleNotFoundError: app}，通过激活 \texttt{.venv}、
+执行 editable install 并使用 \texttt{python -m pytest} 解决。
+
+\section{项目目录结构}
+
+当前主要目录：
+
+\begin{lstlisting}[language={}]
+app/
+  __init__.py
+  config.py
+  main.py
+
+  agent/
+    __init__.py
+    graph.py
+    nodes.py
+    prompts.py
+    state.py
+
+  api/
+    __init__.py
+    approvals.py
+    health.py
+    runs.py
+    tasks.py
+
+  benchmark/
+    __init__.py
+    loader.py
+    reset.py
+    runner.py
+    schemas.py
+
+  domain/
+    __init__.py
+    accounts.py
+    employees.py
+    permissions.py
+    tickets.py
+
+  evaluation/
+    __init__.py
+    evaluator.py
+    rules.py
+    state_oracle.py
+    trace_oracle.py
+
+  observability/
+    __init__.py
+    events.py
+    metrics.py
+    tracing.py
+
+  persistence/
+    __init__.py
+    base.py
+    cache.py
+    database.py
+    models.py
+    platform_models.py
+    repositories.py
+
+  tools/
+    __init__.py
+    gateway.py
+    ledger.py
+    recovery.py
+    registry.py
+    schemas.py
+    implementations/
+      __init__.py
+      accounts.py
+      employees.py
+      permissions.py
+      tickets.py
+
+benchmark_tasks/
+  basic/
+    employee_lookup_001.yaml
+    create_ticket_001.yaml
+  permissions/
+  recovery/
+  security/
+
+migrations/
+scripts/
+tests/
+  test_health.py
+  unit/
+  integration/
+  benchmark/
+\end{lstlisting}
+
+\section{阶段 0：架构与范围设计}
+
+初始设计重点不是只让 Agent ``能调用工具''，而是确保运行结果可以被
+验证、重放、恢复和解释。关键设计决策：
+
+\begin{enumerate}[leftmargin=2.2em]
+  \item 同时维护 \textbf{State Oracle} 和 \textbf{Trace Oracle}；
+  \item 外部副作用必须有操作账本和明确的未知状态；
+  \item 工具范围授权与业务权限必须分离；
+  \item 工具调用必须具备参数模式、结果模式、风险等级、超时和审批元数据；
+  \item Benchmark 必须版本化，初始状态必须可重复恢复；
+  \item 评测指标必须精确定义，而不是只看最终文本；
+  \item MVP 先跑通一个稳定业务域，再扩展到 100 个任务。
+\end{enumerate}
+
+\section{阶段 1：基础环境和容器}
+
+\subsection{Docker Compose}
+
+当前 Compose 仅包含 PostgreSQL 和 Redis：
+
+\begin{itemize}[leftmargin=2em]
+  \item PostgreSQL 用户、密码和数据库均为 \texttt{agentbench}；
+  \item PostgreSQL 主机端口为 5432；
+  \item Redis 主机端口为 6379；
+  \item 两个服务都有 healthcheck；
+  \item PostgreSQL 和 Redis 使用命名卷持久化。
+\end{itemize}
+
+常用命令：
+
+\begin{lstlisting}[language=powershell]
+docker compose up -d
+docker compose ps
+docker exec agentbench-postgres psql -U agentbench -d agentbench -c "SELECT 1;"
+docker exec agentbench-redis redis-cli PING
+\end{lstlisting}
+
+预期数据库返回一行 \texttt{1}，Redis 返回 \texttt{PONG}。
+
+\section{阶段 2：FastAPI 基础和健康检查}
+
+\subsection{配置}
+
+\texttt{app/config.py} 使用 Pydantic Settings，主要配置：
+
+\begin{lstlisting}[language={}]
+app_name
+env
+debug
+api_prefix
+database_url
+redis_url
+sql_echo
+\end{lstlisting}
+
+本地 \texttt{.env} 使用宿主机地址访问 PostgreSQL 和 Redis。
+
+\subsection{数据库和 Redis}
+
+\texttt{app/persistence/database.py}：
+
+\begin{itemize}[leftmargin=2em]
+  \item 异步 SQLAlchemy Engine；
+  \item \texttt{AsyncSessionFactory}；
+  \item FastAPI 依赖 \texttt{get\_db\_session}。
+\end{itemize}
+
+\texttt{app/persistence/cache.py} 使用 \texttt{redis.asyncio.Redis.from\_url}。
+
+\subsection{应用生命周期与健康接口}
+
+\texttt{app/main.py} 使用 FastAPI lifespan：
+
+\begin{itemize}[leftmargin=2em]
+  \item 启动时创建 Redis 客户端；
+  \item 关闭时关闭 Redis 和 SQLAlchemy Engine。
+\end{itemize}
+
+健康接口：
+
+\begin{lstlisting}[language={}]
+GET /health/live
+GET /health/ready
+\end{lstlisting}
+
+\texttt{/health/ready} 并发执行 PostgreSQL \texttt{SELECT 1} 和 Redis
+\texttt{PING}，每项超时 3 秒：
+
+\begin{itemize}[leftmargin=2em]
+  \item 两者正常：HTTP 200，状态 \texttt{ready}；
+  \item 任一失败：HTTP 503，状态 \texttt{not\_ready}；
+  \item 同时返回各依赖的 \texttt{latency\_ms}。
+\end{itemize}
+
+已验证停止 Redis 后：
+
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{/health/ready} 返回 503；
+  \item \texttt{/health/live} 仍返回 200；
+  \item 恢复 Redis 后 readiness 自动恢复。
+\end{itemize}
+
+\section{阶段 3A：业务数据模型}
+
+\subsection{SQLAlchemy Base}
+
+\texttt{app/persistence/base.py} 包含：
+
+\begin{itemize}[leftmargin=2em]
+  \item 统一约束命名 convention；
+  \item \texttt{Base(DeclarativeBase)}；
+  \item \texttt{TimestampMixin}，包含
+        \texttt{created\_at} 和 \texttt{updated\_at}。
+\end{itemize}
+
+\subsection{业务表}
+
+\begin{longtable}{p{3.3cm}p{10cm}}
+\toprule
+表 & 关键字段与约束 \\
+\midrule
+\texttt{employees} &
+\texttt{id} 主键；\texttt{employee\_no} 唯一；
+\texttt{name}；\texttt{department}；
+状态为 \texttt{active/inactive/terminated}。 \\
+
+\texttt{accounts} &
+\texttt{id} 主键；\texttt{employee\_id} 唯一外键；
+\texttt{username} 唯一；
+状态为 \texttt{active/disabled/locked}；
+\texttt{version > 0}。 \\
+
+\texttt{permissions} &
+\texttt{id}；\texttt{code} 唯一；
+\texttt{name}；\texttt{description}；
+风险等级 \texttt{low/medium/high/critical}；
+\texttt{requires\_approval}。 \\
+
+\texttt{employee\_permissions} &
+员工与权限复合主键；
+状态 \texttt{active/revoked}；
+\texttt{granted\_by/granted\_at/revoked\_at}。 \\
+
+\texttt{tickets} &
+\texttt{id}；请求人与目标员工；
+类型为 \texttt{permission\_grant/permission\_revoke/account\_recovery/general}；
+状态、风险、标题、描述、解决结果和 \texttt{version}；
+后续增加唯一 \texttt{source\_operation\_id}。 \\
+\bottomrule
+\end{longtable}
+
+第一份迁移：
+
+\begin{lstlisting}[language={}]
+d289cb2313aa create core business tables
+\end{lstlisting}
+
+已验证升级、降级到首迁移以及重新升级。
+
+\section{阶段 3B：平台运行与评测数据模型}
+
+平台表位于 \texttt{app/persistence/platform\_models.py}。
+
+\subsection{benchmark\_tasks}
+
+保存任务身份、数据集版本、用户请求、初始状态、可用工具、期望状态、
+要求事件、禁止事件、时序规则、预算、元数据和激活状态。
+
+唯一约束：
+
+\begin{lstlisting}[language={}]
+(task_key, version)
+\end{lstlisting}
+
+\subsection{agent\_runs}
+
+保存任务、实验、运行状态、模型、提供商、Prompt 版本、Agent 策略、
+Memory 策略、输入、配置、随机种子、Checkpoint、Trace、步骤数、
+工具调用数、Token、成本、延迟、最终回复、错误和时间字段。
+
+\subsection{run\_steps}
+
+保存运行步骤、父步骤、步骤序号、类型、状态、模型、工具、输入输出、
+Token、延迟、错误和时间字段。运行内步骤序号唯一。
+
+\subsection{tool\_operations}
+
+工具操作账本，当前关键字段：
+
+\begin{lstlisting}[language={}]
+id
+operation_id
+run_id
+step_id
+tool_name
+arguments
+arguments_hash
+idempotency_key
+risk_level
+requires_approval
+is_idempotent
+status
+retry_count
+recovery_count
+result
+latency_ms
+external_reference
+error_type
+error_message
+error_details
+recovered_at
+recovery_details
+started_at
+finished_at
+\end{lstlisting}
+
+关键唯一约束：
+
+\begin{lstlisting}[language={}]
+(run_id, idempotency_key)
+operation_id
+\end{lstlisting}
+
+状态包含：
+
+\begin{lstlisting}[language={}]
+prepared
+running
+succeeded
+failed
+unknown
+rejected
+cancelled
+\end{lstlisting}
+
+\subsection{approvals}
+
+保存审批绑定、审批哈希、申请人与决策人、原因、过期与决策时间。
+
+\subsection{evaluation\_results}
+
+每个 run 一条评测结果，包含总通过状态、评测器版本、综合得分、
+状态得分、Trace 得分、安全得分、违规项和最终状态。
+
+第二份迁移：
+
+\begin{lstlisting}[language={}]
+fff6ae231429
+\end{lstlisting}
+
+已执行升级、回滚到第一迁移、再次升级，并检查表结构。
+
+后续迁移还增加：
+
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{tool\_operations.latency\_ms}；
+  \item \texttt{tool\_operations.error\_details}；
+  \item \texttt{tickets.source\_operation\_id}；
+  \item \texttt{tool\_operations.recovery\_count}；
+  \item \texttt{tool\_operations.recovered\_at}；
+  \item \texttt{tool\_operations.recovery\_details}。
+\end{itemize}
+
+\section{阶段 3C：Benchmark YAML 模式与导入}
+
+\subsection{Pydantic 模式}
+
+\texttt{app/benchmark/schemas.py} 目前包括：
+
+\begin{lstlisting}[language={}]
+TaskBudget
+EmployeeSeed
+AccountSeed
+PermissionSeed
+EmployeePermissionSeed
+TicketSeed
+BusinessInitialState
+BenchmarkTaskSpec
+\end{lstlisting}
+
+重要规则：
+
+\begin{itemize}[leftmargin=2em]
+  \item 所有模式使用 \texttt{extra="forbid"}；
+  \item 状态字段使用 \texttt{Literal}；
+  \item 检查重复 employee ID、员工号、username、permission code；
+  \item 检查关系引用是否存在；
+  \item \texttt{available\_tools} 会 trim，拒绝空名称与重复项；
+  \item \texttt{initial\_state} 必须是
+        \texttt{BusinessInitialState}。
+\end{itemize}
+
+\subsection{加载与导入}
+
+\texttt{app/benchmark/loader.py}：
+
+\begin{itemize}[leftmargin=2em]
+  \item 使用 \texttt{yaml.safe\_load}；
+  \item 递归加载 \texttt{.yaml/.yml}；
+  \item 按路径排序；
+  \item 拒绝重复的 \texttt{(task\_key, version)}。
+\end{itemize}
+
+Repository upsert 时必须序列化：
+
+\begin{lstlisting}[language=Python]
+"initial_state": spec.initial_state.model_dump(mode="json")
+\end{lstlisting}
+
+曾出现 Pydantic 对象不能写入 JSONB 的问题，已通过上述转换解决。
+
+导入命令：
+
+\begin{lstlisting}[language=powershell]
+python scripts/import_benchmark_tasks.py
+\end{lstlisting}
+
+导入具有幂等性，多次执行不会重复创建任务。
+
+\subsection{任务 employee\_lookup\_001}
+
+文件：
+
+\begin{lstlisting}[language={}]
+benchmark_tasks/basic/employee_lookup_001.yaml
+\end{lstlisting}
+
+任务内容：
+
+\begin{itemize}[leftmargin=2em]
+  \item 查询张三的员工号、部门和状态；
+  \item 初始员工：
+        \texttt{emp\_001 / E10001 / 张三 / 数据平台部 / active}；
+  \item 初始账号：
+        \texttt{account\_001 / zhangsan / active / version=1}；
+  \item 可用工具：\texttt{get\_employee}；
+  \item 禁止写工具；
+  \item 预算：5 步、2 次工具、3000 Token、30 秒。
+\end{itemize}
+
+\subsection{任务 create\_ticket\_001}
+
+文件：
+
+\begin{lstlisting}[language={}]
+benchmark_tasks/basic/create_ticket_001.yaml
+\end{lstlisting}
+
+任务内容：
+
+\begin{itemize}[leftmargin=2em]
+  \item 张三为李四创建普通服务工单；
+  \item 标题：数据平台访问问题；
+  \item 描述：李四无法访问数据平台，请协助检查账号权限；
+  \item 初始员工为 \texttt{emp\_001} 和 \texttt{emp\_002}；
+  \item 初始工单为空；
+  \item 可用工具：\texttt{get\_employee}、\texttt{create\_ticket}；
+  \item 最终应存在状态为 \texttt{open} 的目标工单；
+  \item 预算：8 步、4 次工具、5000 Token、45 秒。
+\end{itemize}
+
+\section{阶段 3D：业务状态重置}
+
+\texttt{app/benchmark/reset.py} 提供：
+
+\begin{lstlisting}[language={}]
+reset_business_state(session, state)
+capture_business_state(session)
+normalize_initial_state(state)
+\end{lstlisting}
+
+重置顺序：
+
+\begin{lstlisting}[language={}]
+DELETE tickets
+DELETE employee_permissions
+DELETE accounts
+DELETE permissions
+DELETE employees
+
+INSERT employees
+INSERT permissions
+FLUSH
+INSERT accounts
+INSERT employee_permissions
+INSERT tickets
+FLUSH
+\end{lstlisting}
+
+所有操作由调用方事务包裹，失败即回滚。
+
+脚本：
+
+\begin{lstlisting}[language=powershell]
+python scripts/reset_business_state.py `
+  --task-key employee_lookup_001 `
+  --version 1
+\end{lstlisting}
+
+脚本会：
+
+\begin{enumerate}[leftmargin=2.2em]
+  \item 查找任务；
+  \item 校验 \texttt{BusinessInitialState}；
+  \item 重置业务表；
+  \item 捕获最终状态；
+  \item 与规范化初始状态比较；
+  \item 打印实体数量。
+\end{enumerate}
+
+已验证重复重置和数据库结果一致。
+
+\section{阶段 4A：工具协议、Registry 和 Gateway}
+
+\subsection{统一工具协议}
+
+\texttt{app/tools/schemas.py} 主要对象：
+
+\begin{lstlisting}[language={}]
+ToolMetadata
+ToolExecutionContext
+ToolError
+ToolExecutionResponse
+ToolBusinessError
+ToolDefinition
+ToolHandler
+\end{lstlisting}
+
+当前 \texttt{ToolMetadata} 关键字段：
+
+\begin{lstlisting}[language={}]
+name
+description
+risk_level
+required_permissions
+requires_approval
+is_idempotent
+read_only
+timeout_seconds
+external_reference_path
+\end{lstlisting}
+
+当前 \texttt{ToolExecutionContext} 关键字段：
+
+\begin{lstlisting}[language={}]
+run_id
+step_id
+operation_id
+actor_id
+available_tools
+permissions
+fault_injection
+\end{lstlisting}
+
+授权被拆分为两层：
+
+\begin{description}[leftmargin=3.7cm,style=nextline]
+  \item[\texttt{available\_tools}]
+        当前 Benchmark 任务允许调用的工具；
+  \item[\texttt{permissions}]
+        当前执行身份具备的业务权限。
+\end{description}
+
+两层都必须通过。
+
+\subsection{第一个工具 get\_employee}
+
+文件：
+
+\begin{lstlisting}[language={}]
+app/tools/implementations/employees.py
+\end{lstlisting}
+
+支持且只能提供一个查询条件：
+
+\begin{lstlisting}[language=json]
+{"employee_id": "emp_001"}
+{"employee_no": "E10001"}
+{"name": "张三"}
+\end{lstlisting}
+
+错误码：
+
+\begin{lstlisting}[language={}]
+employee_not_found
+employee_ambiguous
+invalid_arguments
+\end{lstlisting}
+
+元数据：
+
+\begin{lstlisting}[language={}]
+required_permissions = {"employee.read"}
+risk_level = low
+read_only = true
+is_idempotent = true
+timeout_seconds = 3
+\end{lstlisting}
+
+\subsection{Registry}
+
+\texttt{ToolRegistry}：
+
+\begin{itemize}[leftmargin=2em]
+  \item 注册工具定义；
+  \item 禁止同名覆盖；
+  \item 根据名称查询；
+  \item 返回排序后的名称列表。
+\end{itemize}
+
+\subsection{Gateway 基础安全流程}
+
+调用顺序：
+
+\begin{lstlisting}[language={}]
+registered?
+-> allowed by benchmark?
+-> permissions satisfied?
+-> arguments validate?
+-> ledger claim
+-> mark running
+-> execute with timeout and transaction
+-> result validate
+-> ledger finalize
+-> return structured response
+\end{lstlisting}
+
+未知工具、越权工具、缺少权限和错误参数都会被结构化拒绝。
+
+曾修复的问题：
+
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{employees.py} 被重复粘贴导致 E402；
+  \item 删除重复内容时误删 \texttt{select}、\texttt{Employee} 和
+        \texttt{ToolBusinessError} 导入；
+  \item Python 3.13 + Ruff UP040 要求使用
+        \texttt{type Alias = ...}，而不是
+        \texttt{TypeAlias} 注解。
+\end{itemize}
+
+\section{阶段 4B：Tool Operation Ledger}
+
+\subsection{目标}
+
+每次带 \texttt{run\_id} 的工具调用都写入 \texttt{tool\_operations}，
+记录参数、摘要、幂等键、状态、结果、错误与延迟。
+
+\subsection{参数规范化和摘要}
+
+\texttt{app/tools/ledger.py}：
+
+\begin{lstlisting}[language=Python]
+json.dumps(
+    arguments,
+    ensure_ascii=False,
+    sort_keys=True,
+    separators=(",", ":"),
+)
+\end{lstlisting}
+
+之后计算 SHA-256，因此相同参数即使字典键顺序不同，也会得到相同摘要。
+
+\subsection{幂等声明}
+
+\texttt{claim()} 使用 PostgreSQL：
+
+\begin{lstlisting}[language=SQL]
+INSERT ... ON CONFLICT DO NOTHING
+\end{lstlisting}
+
+并依赖唯一约束：
+
+\begin{lstlisting}[language={}]
+(run_id, idempotency_key)
+\end{lstlisting}
+
+行为：
+
+\begin{itemize}[leftmargin=2em]
+  \item 首次调用创建 \texttt{prepared} 记录；
+  \item 执行前改为 \texttt{running}；
+  \item 完成后改为最终状态；
+  \item 重复请求增加 \texttt{retry\_count}；
+  \item 同一幂等键和相同参数返回已有结果；
+  \item 同一幂等键配不同工具或参数返回
+        \texttt{idempotency\_key\_conflict}。
+\end{itemize}
+
+\subsection{已验证结果}
+
+\begin{lstlisting}[language={}]
+调用两次
+数据库只有一条 tool_operations
+第二次 replayed = true
+retry_count = 1
+两个响应 operation_id 相同
+\end{lstlisting}
+
+\section{阶段 4C：第一个写工具 create\_ticket}
+
+\subsection{事务边界}
+
+Gateway 中写工具执行结构：
+
+\begin{lstlisting}[language=Python]
+async with asyncio.timeout(timeout_seconds):
+    async with session.begin():
+        raw_result = await handler(...)
+        validated_result = result_model.model_validate(raw_result)
+\end{lstlisting}
+
+结果校验也在业务事务内部。返回结构错误时事务回滚。
+
+\subsection{响应丢失故障注入}
+
+故障模式：
+
+\begin{lstlisting}[language={}]
+drop_response_after_commit
+\end{lstlisting}
+
+正确顺序：
+
+\begin{lstlisting}[language={}]
+handler execution
+-> result validation
+-> transaction commit
+-> injected TimeoutError
+-> response status timed_out
+-> ledger status unknown
+\end{lstlisting}
+
+最初错误实现把长时间 \texttt{sleep} 放在
+\texttt{asyncio.timeout()} 外部，导致结果只是延迟约 5.1 秒后返回成功。
+修复为事务提交后主动抛出 \texttt{TimeoutError}。
+
+\subsection{unknown 判定}
+
+写操作发生超时后：
+
+\begin{lstlisting}[language=Python]
+response.status == "timed_out"
+and not definition.metadata.read_only
+\end{lstlisting}
+
+则账本必须写为 \texttt{unknown}，不能误写 \texttt{failed}。
+
+原因：
+
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{failed} 表示明确知道业务副作用没有成功；
+  \item \texttt{unknown} 表示副作用可能已经提交，但调用方没收到结果；
+  \item 是否幂等与结果是否未知是两个独立概念。
+\end{itemize}
+
+\section{阶段 4D：未知状态恢复}
+
+\subsection{业务操作关联}
+
+\texttt{tickets.source\_operation\_id} 唯一保存：
+
+\begin{lstlisting}[language={}]
+tool_operations.operation_id
+-> tickets.source_operation_id
+\end{lstlisting}
+
+Gateway 将账本生成的 \texttt{operation\_id} 注入
+\texttt{ToolExecutionContext}，模型不能自行提供。
+
+\texttt{create\_ticket} 创建工单时保存：
+
+\begin{lstlisting}[language=Python]
+source_operation_id=context.operation_id
+\end{lstlisting}
+
+如果同一 \texttt{operation\_id} 已经有工单，则直接返回已有工单，
+避免重复副作用。
+
+\subsection{恢复服务}
+
+文件：
+
+\begin{lstlisting}[language={}]
+app/tools/recovery.py
+\end{lstlisting}
+
+主要对象：
+
+\begin{lstlisting}[language={}]
+RecoveryResolution
+RecoveryResponse
+RecoveryRegistry
+UnknownOperationRecoveryService
+recover_create_ticket
+\end{lstlisting}
+
+恢复流程：
+
+\begin{enumerate}[leftmargin=2.2em]
+  \item 根据 \texttt{operation\_id} 查询并锁定
+        \texttt{ToolOperation}；
+  \item 仅恢复状态为 \texttt{unknown} 的操作；
+  \item 根据工具名查找恢复处理器；
+  \item \texttt{recover\_create\_ticket} 使用
+        \texttt{source\_operation\_id} 精确查找工单；
+  \item 找到工单后把账本改为 \texttt{succeeded}；
+  \item 保存结果、\texttt{external\_reference}、
+        \texttt{recovery\_count}、\texttt{recovered\_at} 和
+        \texttt{recovery\_details}；
+  \item 相同幂等请求随后可以直接回放成功结果。
+\end{enumerate}
+
+\subsection{已验证恢复结果}
+
+执行：
+
+\begin{lstlisting}[language=powershell]
+python scripts/demo_unknown_recovery.py
+\end{lstlisting}
+
+实际关键结果：
+
+\begin{lstlisting}[language={}]
+first_response.status = timed_out
+first_response.operation_id = op_339185010b0543d0850e35abc6e2ca46
+
+recovery_response.previous_status = unknown
+recovery_response.current_status = succeeded
+recovery_response.recovered = true
+recovery_response.recovery_count = 1
+
+external_reference = ticket_6d7f9be621bf480abd7d2dfa
+replay_response.status = succeeded
+replay_response.replayed = true
+ticket_count = 1
+ledger.status = succeeded
+ledger.retry_count = 1
+ledger.recovery_count = 1
+\end{lstlisting}
+
+阶段 4D 完全通过。
+
+\section{阶段 4E-1：扩展只读业务工具}
+
+\subsection{get\_account}
+
+文件：
+
+\begin{lstlisting}[language={}]
+app/tools/implementations/accounts.py
+\end{lstlisting}
+
+查询条件二选一：
+
+\begin{lstlisting}[language=json]
+{"employee_id": "emp_001"}
+{"username": "zhangsan"}
+\end{lstlisting}
+
+权限：
+
+\begin{lstlisting}[language={}]
+account.read
+\end{lstlisting}
+
+错误码：
+
+\begin{lstlisting}[language={}]
+account_not_found
+account_ambiguous
+invalid_arguments
+\end{lstlisting}
+
+\subsection{list\_employee\_permissions}
+
+文件：
+
+\begin{lstlisting}[language={}]
+app/tools/implementations/permissions.py
+\end{lstlisting}
+
+输入：
+
+\begin{lstlisting}[language=json]
+{
+  "employee_id": "emp_001",
+  "include_revoked": false
+}
+\end{lstlisting}
+
+默认仅返回 active 权限。员工不存在返回
+\texttt{employee\_not\_found}；员工存在但权限为空时成功返回
+\texttt{count=0}。
+
+权限：
+
+\begin{lstlisting}[language={}]
+permission.read
+\end{lstlisting}
+
+\subsection{get\_ticket}
+
+位于：
+
+\begin{lstlisting}[language={}]
+app/tools/implementations/tickets.py
+\end{lstlisting}
+
+输入：
+
+\begin{lstlisting}[language=json]
+{"ticket_id": "ticket_..."}
+\end{lstlisting}
+
+权限：
+
+\begin{lstlisting}[language={}]
+ticket.read
+\end{lstlisting}
+
+不存在时返回 \texttt{ticket\_not\_found}。
+
+\subsection{当前默认工具注册表}
+
+\begin{longtable}{p{4cm}p{3cm}p{2.3cm}p{2.5cm}}
+\toprule
+工具 & 所需权限 & 只读 & 风险 \\
+\midrule
+\texttt{get\_employee} & \texttt{employee.read} & 是 & low \\
+\texttt{get\_account} & \texttt{account.read} & 是 & low \\
+\texttt{list\_employee\_permissions} & \texttt{permission.read} & 是 & low \\
+\texttt{get\_ticket} & \texttt{ticket.read} & 是 & low \\
+\texttt{create\_ticket} & \texttt{ticket.write} & 否 & medium \\
+\bottomrule
+\end{longtable}
+
+\subsection{阶段 4E-1 最新成功输出摘要}
+
+\begin{lstlisting}[language={}]
+run_id = 7c60b971-dd5e-48cb-beb2-6ba8fd8effd7
+
+get_account:
+  status = succeeded
+  account.id = account_001
+  username = zhangsan
+  account.status = active
+  version = 1
+
+list_employee_permissions:
+  status = succeeded
+  employee_id = emp_001
+  count = 0
+
+create_ticket:
+  status = succeeded
+  ticket.id = ticket_3b65e31088164810b8a102e0
+  status = open
+  risk_level = low
+
+get_ticket:
+  status = succeeded
+  ticket.id = ticket_3b65e31088164810b8a102e0
+\end{lstlisting}
+
+\textbf{结论：}阶段 4E-1 通过。
+
+\section{当前测试与质量检查}
+
+常用完整检查：
+
+\begin{lstlisting}[language=powershell]
+ruff check app tests scripts --fix
+ruff format app tests scripts
+ruff check app tests scripts
+python -m pytest
+\end{lstlisting}
+
+数据库迁移检查：
+
+\begin{lstlisting}[language=powershell]
+python -m alembic current
+python -m alembic heads
+python -m alembic upgrade head
+\end{lstlisting}
+
+重置和演示：
+
+\begin{lstlisting}[language=powershell]
+python scripts/import_benchmark_tasks.py
+
+python scripts/reset_business_state.py `
+  --task-key employee_lookup_001 `
+  --version 1
+
+python scripts/invoke_get_employee.py --name 张三
+python scripts/demo_tool_ledger.py
+python scripts/demo_create_ticket.py
+python scripts/demo_unknown_recovery.py
+python scripts/demo_read_business_tools.py
+\end{lstlisting}
+
+\section{关键设计不变量}
+
+后续开发不得破坏以下约束：
+
+\begin{enumerate}[leftmargin=2.2em]
+  \item 工具只能通过 \texttt{ToolGateway} 调用；
+  \item 工具定义必须有输入模式、输出模式和安全元数据；
+  \item \texttt{available\_tools} 与 \texttt{permissions} 必须分别检查；
+  \item 带 \texttt{run\_id} 的调用必须进入工具账本；
+  \item 同一运行中的相同幂等键不得产生重复操作记录；
+  \item 相同幂等键配不同参数必须拒绝；
+  \item 写操作由 Gateway 管理事务；
+  \item 结果模式校验失败时写事务必须回滚；
+  \item 写操作提交后响应丢失必须记录为 \texttt{unknown}；
+  \item unknown 恢复必须依据稳定业务标识，而不是模糊匹配标题或描述；
+  \item \texttt{operation\_id} 由 Gateway 注入，不能信任模型输入；
+  \item Benchmark 重置必须确定性、可重复并在事务中执行。
+\end{enumerate}
+
+\section{已知非阻塞优化项}
+
+\subsection{回放延迟语义}
+
+当前回放响应的 \texttt{latency\_ms} 使用原操作执行延迟。例如原调用为
+27ms，幂等回放仍返回 27ms。后续可观测性阶段建议拆分：
+
+\begin{lstlisting}[language={}]
+execution_latency_ms
+replay_latency_ms
+\end{lstlisting}
+
+否则 P95/P99 可能把回放请求误计为原始执行耗时。
+
+\subsection{运行统计}
+
+部分演示脚本手动更新：
+
+\begin{lstlisting}[language={}]
+AgentRun.total_tool_calls
+AgentRun.status
+AgentRun.finished_at
+\end{lstlisting}
+
+正式 Runner 阶段应由统一运行生命周期服务自动维护，避免脚本自行统计。
+
+\section{下一阶段：4E-2 update\_ticket}
+
+\subsection{目标}
+
+实现第一个更新型写工具：
+
+\begin{lstlisting}[language={}]
+update_ticket
+\end{lstlisting}
+
+必须覆盖：
+
+\begin{enumerate}[leftmargin=2.2em]
+  \item 根据 \texttt{ticket\_id} 查询工单；
+  \item 要求调用方提供 \texttt{expected\_version}；
+  \item 使用乐观锁防止并发覆盖；
+  \item 至少支持更新状态、标题、描述或 resolution；
+  \item 更新成功后 \texttt{version + 1}；
+  \item 相同 operation ID 不重复执行；
+  \item 响应丢失后状态为 \texttt{unknown}；
+  \item 恢复器通过操作关联或更新审计判断是否已经成功；
+  \item 恢复后可回放成功结果；
+  \item 添加 Benchmark 任务和并发冲突测试。
+\end{enumerate}
+
+\subsection{建议输入模式}
+
+\begin{lstlisting}[language=json]
+{
+  "ticket_id": "ticket_001",
+  "expected_version": 1,
+  "status": "in_progress",
+  "resolution": null
+}
+\end{lstlisting}
+
+必须至少提供一个可更新字段。
+
+\subsection{建议错误码}
+
+\begin{lstlisting}[language={}]
+ticket_not_found
+ticket_version_conflict
+no_ticket_changes
+invalid_ticket_status_transition
+\end{lstlisting}
+
+\subsection{推荐实现策略}
+
+使用原子条件更新：
+
+\begin{lstlisting}[language=SQL]
+UPDATE tickets
+SET status = :status,
+    version = version + 1,
+    updated_at = now()
+WHERE id = :ticket_id
+  AND version = :expected_version
+RETURNING ...
+\end{lstlisting}
+
+如果更新行数为 0，需要再次查询以区分：
+
+\begin{itemize}[leftmargin=2em]
+  \item 工单不存在；
+  \item 工单存在但版本冲突。
+\end{itemize}
+
+为了支持 unknown 恢复，建议增加更新审计表，或为工单保存最近一次
+\texttt{source\_operation\_id}。更稳健的方案是新建
+\texttt{ticket\_mutations}：
+
+\begin{lstlisting}[language={}]
+id
+ticket_id
+operation_id unique
+previous_version
+new_version
+change_payload JSONB
+created_at
+\end{lstlisting}
+
+恢复器可通过 \texttt{operation\_id} 精确确认更新是否已提交。
+
+\section{后续路线图}
+
+完成 4E-2 后，建议顺序：
+
+\begin{enumerate}[leftmargin=2.2em]
+  \item \textbf{LangGraph 最小执行闭环}\\
+        Agent State、模型节点、工具节点、路由、终止条件；
+  \item \textbf{Run/Step 生命周期}\\
+        自动创建 AgentRun、RunStep、工具调用计数和最终状态；
+  \item \textbf{Checkpoint 与恢复}\\
+        Agent 中断后从最后稳定节点继续；
+  \item \textbf{Evaluation Engine}\\
+        State Oracle、Trace Oracle、预算和时序规则；
+  \item \textbf{可观测性}\\
+        统一事件模型、OpenTelemetry、Langfuse、指标；
+  \item \textbf{审批与高风险权限工具}\\
+        grant/revoke permission、审批绑定与防篡改；
+  \item \textbf{故障和安全注入}\\
+        超时、重复响应、工具错误、Prompt Injection、越权；
+  \item \textbf{Benchmark 扩展}\\
+        basic、permissions、recovery、security 四类任务扩展到 100 个；
+  \item \textbf{统计实验}\\
+        不同模型、Prompt、Agent 策略、Memory 策略和故障率对比。
+\end{enumerate}
+
+\section{新会话恢复操作清单}
+
+当对话消失或重新开始时，将本文件提供给新的助手，并执行：
+
+\begin{enumerate}[leftmargin=2.2em]
+  \item 告知仓库路径：
+        \texttt{E:\textbackslash Working\textbackslash agent-bench-ops}；
+  \item 激活虚拟环境；
+  \item 启动 Docker Compose；
+  \item 查看 Git 状态和最近提交；
+  \item 查看 Alembic 当前版本；
+  \item 运行 Ruff 和 pytest；
+  \item 导入 Benchmark；
+  \item 运行最新演示脚本；
+  \item 从 ``下一阶段：4E-2 update\_ticket'' 继续。
+\end{enumerate}
+
+命令：
+
+\begin{lstlisting}[language=powershell]
+cd E:\Working\agent-bench-ops
+.\.venv\Scripts\Activate.ps1
+
+docker compose up -d
+docker compose ps
+
+git status
+git log --oneline -10
+
+python -m alembic current
+python -m alembic heads
+python -m alembic upgrade head
+
+ruff check app tests scripts
+python -m pytest
+
+python scripts/import_benchmark_tasks.py
+python scripts/demo_read_business_tools.py
+\end{lstlisting}
+
+新助手需要重点确认：
+
+\begin{lstlisting}[language={}]
+Current completed stage: 4E-1
+Next stage: 4E-2 update_ticket
+Default registered tools: 5
+Unknown create_ticket recovery: passed
+Latest read business tools demo: passed
+\end{lstlisting}
+
+\section{建议 Git 提交记录}
+
+之前建议过的提交信息：
+
+\begin{lstlisting}[language={}]
+feat: add core business schema
+feat: add runtime and evaluation schema
+feat: add benchmark state reset
+feat: add tool operation ledger
+feat: add transactional create ticket tool
+feat: recover unknown tool operations
+\end{lstlisting}
+
+当前阶段可提交：
+
+\begin{lstlisting}[language=powershell]
+git add .
+git commit -m "feat: add business read tools"
+\end{lstlisting}
+
+\section{LaTeX 编译说明}
+
+本文件使用 \texttt{ctexart}，推荐使用 XeLaTeX：
+
+\begin{lstlisting}[language=powershell]
+xelatex agentbenchops_handoff.tex
+xelatex agentbenchops_handoff.tex
+\end{lstlisting}
+
+运行两次是为了正确生成目录和页码引用。
+
+\section{最终交接摘要}
+
+\begin{center}
+\fbox{
+\begin{minipage}{0.9\textwidth}
+\textbf{项目：}AgentBenchOps
+
+\textbf{当前完成阶段：}4E-1 扩展只读业务工具
+
+\textbf{最新验证：}get\_account、list\_employee\_permissions、
+create\_ticket、get\_ticket 全部成功
+
+\textbf{可靠性能力：}参数校验、工具范围、权限、事务、账本、参数哈希、
+幂等回放、unknown 状态、业务副作用恢复
+
+\textbf{下一阶段：}4E-2 update\_ticket，加入 expected\_version、
+乐观锁、幂等更新和 unknown 恢复
+
+\textbf{随后：}LangGraph 最小执行闭环
+\end{minipage}
+}
+\end{center}
+
+\end{document}
