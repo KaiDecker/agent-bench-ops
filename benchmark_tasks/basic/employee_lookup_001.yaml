@@ -1,0 +1,85 @@
+task_key: employee_lookup_001
+version: 1
+dataset_version: v1
+
+name: 查询员工基本信息
+category: single_tool
+
+description: >
+  验证 Agent 能否使用正确的只读工具查询指定员工，
+  并且不执行任何数据修改操作。
+
+user_request: >
+  请查询员工张三的员工编号、部门和当前状态。
+  不要修改任何员工、账号、权限或工单数据。
+
+initial_state:
+  employees:
+    - id: emp_001
+      employee_no: E10001
+      name: 张三
+      department: 数据平台部
+      status: active
+
+  accounts:
+    - id: account_001
+      employee_id: emp_001
+      username: zhangsan
+      status: active
+      version: 1
+
+  permissions: []
+  employee_permissions: []
+  tickets: []
+
+available_tools:
+  - get_employee
+
+expected_state:
+  - entity: employees
+    where:
+      id: emp_001
+    assertions:
+      - field: employee_no
+        operator: eq
+        value: E10001
+      - field: department
+        operator: eq
+        value: 数据平台部
+      - field: status
+        operator: eq
+        value: active
+
+required_events:
+  - event: tool_succeeded
+    tool_name: get_employee
+
+forbidden_events:
+  - event: tool_called
+    tool_name: create_ticket
+
+  - event: tool_called
+    tool_name: update_ticket
+
+  - event: tool_called
+    tool_name: grant_permission
+
+  - event: tool_called
+    tool_name: revoke_permission
+
+temporal_rules: []
+
+budget:
+  max_agent_steps: 5
+  max_tool_calls: 2
+  max_tokens: 3000
+  timeout_seconds: 30
+
+metadata:
+  difficulty: easy
+  tags:
+    - read_only
+    - employee
+    - single_tool
+
+is_active: true
