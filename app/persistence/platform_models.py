@@ -617,6 +617,11 @@ class ToolOperation(TimestampMixin, Base):
         nullable=True,
     )
 
+    latency_ms: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
     external_reference: Mapped[str | None] = mapped_column(
         String(200),
         nullable=True,
@@ -631,6 +636,11 @@ class ToolOperation(TimestampMixin, Base):
 
     error_message: Mapped[str | None] = mapped_column(
         Text,
+        nullable=True,
+    )
+
+    error_details: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB,
         nullable=True,
     )
 
