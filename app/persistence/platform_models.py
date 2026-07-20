@@ -612,6 +612,23 @@ class ToolOperation(TimestampMixin, Base):
         server_default="0",
     )
 
+    recovery_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+
+    recovered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    recovery_details: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
     result: Mapped[dict[str, object] | None] = mapped_column(
         JSONB,
         nullable=True,

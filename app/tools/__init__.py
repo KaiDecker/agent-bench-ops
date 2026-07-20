@@ -1,5 +1,8 @@
 from app.tools.gateway import ToolGateway
 from app.tools.ledger import OperationLedger
+from app.tools.recovery import (
+    UnknownOperationRecoveryService,
+)
 from app.tools.registry import ToolRegistry, build_default_registry
 from app.tools.schemas import (
     ToolDefinition,
@@ -17,4 +20,5 @@ __all__ = [
     "ToolRegistry",
     "build_default_registry",
     "OperationLedger",
+    "UnknownOperationRecoveryService",
 ]

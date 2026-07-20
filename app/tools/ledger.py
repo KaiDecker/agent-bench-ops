@@ -40,6 +40,7 @@ class OperationRecord:
     error_type: str | None
     error_message: str | None
     error_details: dict[str, Any] | None
+    external_reference: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +198,7 @@ class OperationLedger:
         status: PersistedOperationStatus,
         result: dict[str, Any] | None,
         latency_ms: float,
+        external_reference: str | None,
         error_type: str | None,
         error_message: str | None,
         error_details: dict[str, Any] | None,
@@ -212,6 +214,7 @@ class OperationLedger:
             operation.status = status
             operation.result = result
             operation.latency_ms = latency_ms
+            operation.external_reference = external_reference
             operation.error_type = error_type
             operation.error_message = error_message
             operation.error_details = error_details
@@ -252,4 +255,5 @@ class OperationLedger:
             error_type=operation.error_type,
             error_message=operation.error_message,
             error_details=operation.error_details,
+            external_reference=operation.external_reference,
         )

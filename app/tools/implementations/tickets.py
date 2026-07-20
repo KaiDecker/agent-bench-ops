@@ -27,6 +27,7 @@ class CreateTicketArguments(BaseModel):
         min_length=1,
         max_length=64,
     )
+
     target_employee_id: str = Field(
         min_length=1,
         max_length=64,
@@ -46,12 +47,21 @@ class CreateTicketArguments(BaseModel):
         "critical",
     ] = "medium"
 
-    title: str = Field(min_length=1, max_length=200)
-    description: str = Field(min_length=1, max_length=5000)
+    title: str = Field(
+        min_length=1,
+        max_length=200,
+    )
+
+    description: str = Field(
+        min_length=1,
+        max_length=5000,
+    )
 
 
 class TicketResult(BaseModel):
-    """创建后的工单数据。"""
+    """工单数据。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     id: str
     requester_employee_id: str
@@ -67,53 +77,13 @@ class TicketResult(BaseModel):
 class CreateTicketResult(BaseModel):
     """创建工单工具的输出。"""
 
+    model_config = ConfigDict(extra="forbid")
+
     ticket: TicketResult
 
 
-async def create_ticket(
-    session: AsyncSession,
-    arguments: CreateTicketArguments,
-    context: ToolExecutionContext,
-) -> CreateTicketResult:
-    """创建一张业务工单。"""
-
-    del context
-
-    required_employee_ids = {
-        arguments.requester_employee_id,
-        arguments.target_employee_id,
-    }
-
-    result = await session.execute(
-        select(Employee.id).where(Employee.id.in_(required_employee_ids))
-    )
-
-    existing_employee_ids = set(result.scalars().all())
-    missing_employee_ids = sorted(required_employee_ids - existing_employee_ids)
-
-    if missing_employee_ids:
-        raise ToolBusinessError(
-            code="employee_not_found",
-            message=("One or more employees referenced by the ticket do not exist."),
-            details={
-                "missing_employee_ids": missing_employee_ids,
-            },
-        )
-
-    ticket = Ticket(
-        id=f"ticket_{uuid4().hex[:24]}",
-        requester_employee_id=arguments.requester_employee_id,
-        target_employee_id=arguments.target_employee_id,
-        ticket_type=arguments.ticket_type,
-        status="open",
-        risk_level=arguments.risk_level,
-        title=arguments.title,
-        description=arguments.description,
-        version=1,
-    )
-
-    session.add(ticket)
-    await session.flush()
+def ticket_to_result(ticket: Ticket) -> CreateTicketResult:
+    """将 Ticket ORM 对象转换为工具输出。"""
 
     return CreateTicketResult(
         ticket=TicketResult(
@@ -130,6 +100,71 @@ async def create_ticket(
     )
 
 
+async def create_ticket(
+    session: AsyncSession,
+    arguments: CreateTicketArguments,
+    context: ToolExecutionContext,
+) -> CreateTicketResult:
+    """
+    创建一张业务工单。
+
+    operation_id 会被保存到 source_operation_id，
+    用于幂等执行和 unknown 状态恢复。
+    """
+
+    # 相同 operation_id 已经创建过工单时，
+    # 直接返回原有结果，避免重复副作用。
+    if context.operation_id is not None:
+        existing_result = await session.execute(
+            select(Ticket).where(Ticket.source_operation_id == context.operation_id)
+        )
+
+        existing_ticket = existing_result.scalar_one_or_none()
+
+        if existing_ticket is not None:
+            return ticket_to_result(existing_ticket)
+
+    required_employee_ids = {
+        arguments.requester_employee_id,
+        arguments.target_employee_id,
+    }
+
+    employee_result = await session.execute(
+        select(Employee.id).where(Employee.id.in_(required_employee_ids))
+    )
+
+    existing_employee_ids = set(employee_result.scalars().all())
+
+    missing_employee_ids = sorted(required_employee_ids - existing_employee_ids)
+
+    if missing_employee_ids:
+        raise ToolBusinessError(
+            code="employee_not_found",
+            message=("One or more employees referenced by the ticket do not exist."),
+            details={
+                "missing_employee_ids": missing_employee_ids,
+            },
+        )
+
+    ticket = Ticket(
+        id=f"ticket_{uuid4().hex[:24]}",
+        source_operation_id=context.operation_id,
+        requester_employee_id=(arguments.requester_employee_id),
+        target_employee_id=arguments.target_employee_id,
+        ticket_type=arguments.ticket_type,
+        status="open",
+        risk_level=arguments.risk_level,
+        title=arguments.title,
+        description=arguments.description,
+        version=1,
+    )
+
+    session.add(ticket)
+    await session.flush()
+
+    return ticket_to_result(ticket)
+
+
 CREATE_TICKET_TOOL = ToolDefinition(
     metadata=ToolMetadata(
         name="create_ticket",
@@ -137,9 +172,10 @@ CREATE_TICKET_TOOL = ToolDefinition(
         risk_level="medium",
         required_permissions={"ticket.write"},
         requires_approval=False,
-        is_idempotent=False,
+        is_idempotent=True,
         read_only=False,
         timeout_seconds=5.0,
+        external_reference_path="ticket.id",
     ),
     arguments_model=CreateTicketArguments,
     result_model=CreateTicketResult,

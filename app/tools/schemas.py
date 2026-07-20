@@ -40,6 +40,8 @@ class ToolMetadata(BaseModel):
     read_only: bool = False
     timeout_seconds: float = Field(default=5.0, gt=0)
 
+    external_reference_path: str | None = None
+
 
 class ToolExecutionContext(BaseModel):
     """单次工具调用的授权上下文。"""
@@ -48,6 +50,7 @@ class ToolExecutionContext(BaseModel):
 
     run_id: str | None = None
     step_id: str | None = None
+    operation_id: str | None = None
     actor_id: str = "benchmark-agent"
 
     available_tools: set[str] = Field(default_factory=set)

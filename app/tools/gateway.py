@@ -14,6 +14,7 @@ from app.tools.ledger import (
 from app.tools.registry import ToolRegistry
 from app.tools.schemas import (
     ToolBusinessError,
+    ToolDefinition,
     ToolError,
     ToolErrorStatus,
     ToolExecutionContext,
@@ -22,7 +23,19 @@ from app.tools.schemas import (
 
 
 class ToolGateway:
-    """工具调用统一入口。"""
+    """
+    工具调用统一入口。
+
+    负责：
+    1. 工具注册检查
+    2. Benchmark 工具范围检查
+    3. 执行身份权限检查
+    4. 参数与结果校验
+    5. 工具执行超时
+    6. 业务事务提交
+    7. 操作账本持久化
+    8. 幂等调用回放
+    """
 
     def __init__(
         self,
@@ -40,11 +53,14 @@ class ToolGateway:
         context: ToolExecutionContext,
         idempotency_key: str | None = None,
     ) -> ToolExecutionResponse:
+        """执行一次受控工具调用。"""
+
         started_at = perf_counter()
         definition = self._registry.get(tool_name)
 
         claim: OperationClaim | None = None
 
+        # 只有存在 run_id 时，才写入工具操作账本。
         if context.run_id is not None:
             try:
                 claim = await self._ledger.claim(
@@ -72,6 +88,7 @@ class ToolGateway:
                     message=("The tool operation could not be registered."),
                 )
 
+            # 相同 run_id 和 idempotency_key 已经存在。
             if not claim.created:
                 existing = claim.record
 
@@ -99,6 +116,7 @@ class ToolGateway:
 
         operation = claim.record if claim is not None else None
 
+        # 未注册工具。
         if definition is None:
             response = self._error_response(
                 tool_name=tool_name,
@@ -114,6 +132,7 @@ class ToolGateway:
                 definition=None,
             )
 
+        # 工具不在当前 Benchmark 允许范围内。
         if tool_name not in context.available_tools:
             response = self._error_response(
                 tool_name=tool_name,
@@ -129,6 +148,7 @@ class ToolGateway:
                 definition=definition,
             )
 
+        # 权限检查。
         missing_permissions = definition.metadata.required_permissions - context.permissions
 
         if missing_permissions:
@@ -147,6 +167,7 @@ class ToolGateway:
                 definition=definition,
             )
 
+        # 工具参数校验。
         try:
             validated_arguments = definition.arguments_model.model_validate(arguments)
         except ValidationError as exc:
@@ -171,6 +192,7 @@ class ToolGateway:
                 definition=definition,
             )
 
+        # 将账本状态更新成 running。
         if operation is not None:
             try:
                 await self._ledger.mark_running(operation.database_id)
@@ -186,19 +208,32 @@ class ToolGateway:
                     latency_ms=self._latency_ms(started_at),
                 )
 
+        # operation_id 只能由 Gateway 注入，不能由模型提供。
+        execution_context = context
+
+        if operation is not None:
+            execution_context = context.model_copy(
+                update={
+                    "operation_id": operation.operation_id,
+                }
+            )
+
         try:
             async with asyncio.timeout(definition.metadata.timeout_seconds):
+                # 工具业务副作用位于一个独立事务中。
                 async with session.begin():
                     raw_result = await definition.handler(
                         session,
                         validated_arguments,
-                        context,
+                        execution_context,
                     )
 
-                validated_result = definition.result_model.model_validate(raw_result)
+                    # 结果结构不正确时，事务也会回滚。
+                    validated_result = definition.result_model.model_validate(raw_result)
 
             # 离开 session.begin() 后，业务事务已经提交。
-            # 此时模拟响应在返回调用方前丢失。
+            # 此时注入响应丢失，模拟：
+            # 数据库修改成功，但调用方没有收到明确结果。
             if context.fault_injection == "drop_response_after_commit":
                 raise TimeoutError("Injected response loss after transaction commit")
 
@@ -268,8 +303,10 @@ class ToolGateway:
         *,
         response: ToolExecutionResponse,
         operation: OperationRecord | None,
-        definition: Any,
+        definition: ToolDefinition | None,
     ) -> ToolExecutionResponse:
+        """将工具最终结果保存到操作账本。"""
+
         if operation is None:
             return response
 
@@ -277,14 +314,22 @@ class ToolGateway:
 
         if response.status == "succeeded":
             persisted_status = "succeeded"
+
         elif response.status == "rejected":
             persisted_status = "rejected"
+
         elif (
             response.status == "timed_out"
             and definition is not None
             and not definition.metadata.read_only
         ):
+            # 写操作发生超时后，副作用可能已经提交。
             persisted_status = "unknown"
+
+        external_reference = self._extract_external_reference(
+            response.output,
+            (definition.metadata.external_reference_path if definition is not None else None),
+        )
 
         try:
             await self._ledger.finalize(
@@ -292,6 +337,7 @@ class ToolGateway:
                 status=persisted_status,
                 result=response.output,
                 latency_ms=response.latency_ms,
+                external_reference=external_reference,
                 error_type=(response.error.code if response.error is not None else None),
                 error_message=(response.error.message if response.error is not None else None),
                 error_details=(response.error.details if response.error is not None else None),
@@ -316,9 +362,42 @@ class ToolGateway:
         )
 
     @staticmethod
+    def _extract_external_reference(
+        output: dict[str, Any] | None,
+        path: str | None,
+    ) -> str | None:
+        """
+        根据点分路径从工具结果中提取外部业务 ID。
+
+        例如：
+            path = "ticket.id"
+        """
+
+        if output is None or path is None:
+            return None
+
+        current: Any = output
+
+        for path_part in path.split("."):
+            if not isinstance(current, dict):
+                return None
+
+            if path_part not in current:
+                return None
+
+            current = current[path_part]
+
+        if current is None:
+            return None
+
+        return str(current)
+
+    @staticmethod
     def _response_from_existing(
         operation: OperationRecord,
     ) -> ToolExecutionResponse:
+        """根据已有账本记录构造幂等回放结果。"""
+
         common = {
             "tool_name": operation.tool_name,
             "operation_id": operation.operation_id,
@@ -363,6 +442,9 @@ class ToolGateway:
                     message=(
                         "The previous execution may have completed, but its outcome is unknown."
                     ),
+                    details={
+                        "external_reference": (operation.external_reference),
+                    },
                 ),
                 **common,
             )
@@ -403,6 +485,8 @@ class ToolGateway:
         message: str,
         details: dict[str, Any] | None = None,
     ) -> ToolExecutionResponse:
+        """构造标准化工具错误响应。"""
+
         return ToolExecutionResponse(
             tool_name=tool_name,
             status=status,

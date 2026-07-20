@@ -55,6 +55,12 @@ class Ticket(TimestampMixin, Base):
         primary_key=True,
     )
 
+    source_operation_id: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        unique=True,
+    )
+
     requester_employee_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey(
