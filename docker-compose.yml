@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: agentbench-postgres
+    environment:
+      POSTGRES_USER: agentbench
+      POSTGRES_PASSWORD: agentbench
+      POSTGRES_DB: agentbench
+    ports:
+      - "5432:5432"
+    volumes:
+      - agentbench_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U agentbench -d agentbench
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: agentbench-redis
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+    ports:
+      - "6379:6379"
+    volumes:
+      - agentbench_redis_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  agentbench_postgres_data:
+  agentbench_redis_data:
