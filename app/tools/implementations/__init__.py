@@ -16,10 +16,13 @@ from app.tools.implementations.permissions import (
 from app.tools.implementations.tickets import (
     CREATE_TICKET_TOOL,
     GET_TICKET_TOOL,
+    UPDATE_TICKET_TOOL,
     CreateTicketArguments,
     CreateTicketResult,
     GetTicketArguments,
     GetTicketResult,
+    UpdateTicketArguments,
+    UpdateTicketResult,
 )
 
 __all__ = [
@@ -38,4 +41,7 @@ __all__ = [
     "GetTicketResult",
     "ListEmployeePermissionsArguments",
     "ListEmployeePermissionsResult",
+    "UPDATE_TICKET_TOOL",
+    "UpdateTicketArguments",
+    "UpdateTicketResult",
 ]

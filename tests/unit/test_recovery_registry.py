@@ -10,7 +10,10 @@ from app.tools.recovery import (
 def test_default_recovery_registry() -> None:
     registry = build_default_recovery_registry()
 
-    assert registry.names() == ["create_ticket"]
+    assert registry.names() == [
+        "create_ticket",
+        "update_ticket",
+    ]
     assert registry.get("create_ticket") is not None
 
 

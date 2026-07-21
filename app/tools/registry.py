@@ -6,6 +6,7 @@ from app.tools.implementations.permissions import (
 from app.tools.implementations.tickets import (
     CREATE_TICKET_TOOL,
     GET_TICKET_TOOL,
+    UPDATE_TICKET_TOOL,
 )
 from app.tools.schemas import ToolDefinition
 
@@ -53,5 +54,6 @@ def build_default_registry() -> ToolRegistry:
     registry.register(LIST_EMPLOYEE_PERMISSIONS_TOOL)
     registry.register(GET_TICKET_TOOL)
     registry.register(CREATE_TICKET_TOOL)
+    registry.register(UPDATE_TICKET_TOOL)
 
     return registry

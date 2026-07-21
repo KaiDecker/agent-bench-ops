@@ -18,6 +18,7 @@ def test_default_registry_contains_expected_tools() -> None:
         "get_employee",
         "get_ticket",
         "list_employee_permissions",
+        "update_ticket",
     ]
 
 

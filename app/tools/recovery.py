@@ -9,10 +9,13 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
-from app.domain.tickets import Ticket
+from app.domain.tickets import Ticket, TicketMutation
 from app.persistence.database import AsyncSessionFactory
 from app.persistence.platform_models import ToolOperation
-from app.tools.implementations.tickets import ticket_to_result
+from app.tools.implementations.tickets import (
+    UpdateTicketResult,
+    ticket_to_result,
+)
 
 type RecoveryStatus = Literal[
     "succeeded",
@@ -124,12 +127,58 @@ async def recover_create_ticket(
     )
 
 
+async def recover_update_ticket(
+    session: AsyncSession,
+    operation: ToolOperation,
+) -> RecoveryResolution:
+    """根据 TicketMutation 恢复未知更新操作。"""
+
+    result = await session.execute(
+        select(TicketMutation).where(TicketMutation.operation_id == operation.operation_id)
+    )
+
+    mutation = result.scalar_one_or_none()
+
+    if mutation is None:
+        return RecoveryResolution(
+            status="failed",
+            error_type="recovery_effect_not_found",
+            error_message=("No committed ticket mutation was found for the unknown operation."),
+            details={
+                "operation_id": operation.operation_id,
+                "mutation_found": False,
+            },
+        )
+
+    validated_result = UpdateTicketResult.model_validate(mutation.result_snapshot)
+
+    return RecoveryResolution(
+        status="succeeded",
+        result=validated_result.model_dump(mode="json"),
+        external_reference=mutation.ticket_id,
+        details={
+            "operation_id": operation.operation_id,
+            "mutation_found": True,
+            "ticket_id": mutation.ticket_id,
+            "previous_version": (mutation.previous_version),
+            "new_version": mutation.new_version,
+        },
+    )
+
+
 def build_default_recovery_registry() -> RecoveryRegistry:
     registry = RecoveryRegistry()
+
     registry.register(
         "create_ticket",
         recover_create_ticket,
     )
+
+    registry.register(
+        "update_ticket",
+        recover_update_ticket,
+    )
+
     return registry
 
 

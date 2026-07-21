@@ -5,6 +5,7 @@ from sqlalchemy import (
     String,
     Text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.persistence.base import Base, TimestampMixin
@@ -122,4 +123,61 @@ class Ticket(TimestampMixin, Base):
         nullable=False,
         default=1,
         server_default="1",
+    )
+
+
+class TicketMutation(TimestampMixin, Base):
+    """一次已经提交的工单更新操作。"""
+
+    __tablename__ = "ticket_mutations"
+
+    __table_args__ = (
+        CheckConstraint(
+            "previous_version > 0",
+            name=("ck_ticket_mutations_previous_version_positive"),
+        ),
+        CheckConstraint(
+            "new_version = previous_version + 1",
+            name=("ck_ticket_mutations_version_increment"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(64),
+        primary_key=True,
+    )
+
+    ticket_id: Mapped[str] = mapped_column(
+        ForeignKey(
+            "tickets.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    operation_id: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        unique=True,
+    )
+
+    previous_version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+
+    new_version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+
+    change_payload: Mapped[dict[str, object]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
+
+    result_snapshot: Mapped[dict[str, object]] = mapped_column(
+        JSONB,
+        nullable=False,
     )

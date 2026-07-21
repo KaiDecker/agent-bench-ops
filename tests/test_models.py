@@ -1,17 +1,19 @@
 from sqlalchemy import UniqueConstraint
 
+from app.domain.accounts import Account
+from app.domain.employees import Employee
+from app.domain.permissions import (
+    EmployeePermission,
+    Permission,
+)
+from app.domain.tickets import Ticket, TicketMutation
 from app.persistence.base import Base
-from app.persistence.models import (
-    Account,
+from app.persistence.platform_models import (
     AgentRun,
     Approval,
     BenchmarkTask,
-    Employee,
-    EmployeePermission,
     EvaluationResult,
-    Permission,
     RunStep,
-    Ticket,
     ToolOperation,
 )
 
@@ -23,6 +25,7 @@ def test_all_models_are_registered() -> None:
         Permission.__tablename__,
         EmployeePermission.__tablename__,
         Ticket.__tablename__,
+        TicketMutation.__tablename__,
         BenchmarkTask.__tablename__,
         AgentRun.__tablename__,
         RunStep.__tablename__,
