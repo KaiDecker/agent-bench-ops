@@ -12,6 +12,9 @@ from app.agent.nodes import (
     create_model_node,
     create_tool_node,
 )
+from app.agent.recorder import (
+    RunStepRecorderProtocol,
+)
 from app.agent.state import AgentState
 from app.persistence.database import AsyncSessionFactory
 from app.tools.registry import ToolRegistry
@@ -55,8 +58,9 @@ def build_agent_graph(
     registry: ToolRegistry,
     gateway: ToolExecutor,
     session_factory: SessionFactory = (AsyncSessionFactory),
+    recorder: RunStepRecorderProtocol | None = None,
 ):
-    """构建并编译最小 Tool-Calling Agent 图。"""
+    """构建并编译 Tool-Calling Agent 图。"""
 
     builder = StateGraph(AgentState)
 
@@ -65,6 +69,7 @@ def build_agent_graph(
         create_model_node(
             model=model,
             registry=registry,
+            recorder=recorder,
         ),
     )
 
@@ -73,6 +78,7 @@ def build_agent_graph(
         create_tool_node(
             gateway=gateway,
             session_factory=session_factory,
+            recorder=recorder,
         ),
     )
 

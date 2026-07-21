@@ -8,6 +8,7 @@ from app.agent.model import (
     ScriptedEmployeeLookupModel,
     tool_definition_to_openai_schema,
 )
+from app.agent.recorder import RunStepRecorder
 from app.agent.state import (
     AgentError,
     AgentState,
@@ -24,4 +25,5 @@ __all__ = [
     "build_agent_graph",
     "build_initial_state",
     "tool_definition_to_openai_schema",
+    "RunStepRecorder",
 ]

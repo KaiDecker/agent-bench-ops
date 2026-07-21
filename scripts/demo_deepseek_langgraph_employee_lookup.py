@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from app.agent.deepseek import DeepSeekToolCallingModel
 from app.agent.graph import build_agent_graph
+from app.agent.recorder import RunStepRecorder
 from app.agent.state import build_initial_state
 from app.benchmark.reset import reset_business_state
 from app.benchmark.schemas import BusinessInitialState
@@ -165,10 +166,13 @@ async def async_main() -> None:
         max_retries=2,
     )
 
+    recorder = RunStepRecorder()
+
     graph = build_agent_graph(
         model=model,
         registry=registry,
         gateway=gateway,
+        recorder=recorder,
     )
 
     budget = task.budget or {}

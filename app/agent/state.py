@@ -23,8 +23,17 @@ class AgentState(TypedDict):
     available_tools: list[str]
     permissions: list[str]
 
+    # Model 节点执行次数
     step_count: int
+
+    # 工具调用次数
     tool_call_count: int
+
+    # 持久化的 Model + Tool 步骤总数
+    run_step_count: int
+
+    # 最近一个持久化步骤，用于建立父子关系
+    last_run_step_id: str | None
 
     max_steps: int
     max_tool_calls: int
@@ -66,6 +75,8 @@ def build_initial_state(
         permissions=sorted(set(permissions)),
         step_count=0,
         tool_call_count=0,
+        run_step_count=0,
+        last_run_step_id=None,
         max_steps=max_steps,
         max_tool_calls=max_tool_calls,
         final_response=None,
