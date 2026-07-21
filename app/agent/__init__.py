@@ -9,6 +9,11 @@ from app.agent.model import (
     tool_definition_to_openai_schema,
 )
 from app.agent.recorder import RunStepRecorder
+from app.agent.runtime import (
+    AgentRuntime,
+    AgentRuntimeResult,
+    RunStatistics,
+)
 from app.agent.state import (
     AgentError,
     AgentState,
@@ -26,4 +31,7 @@ __all__ = [
     "build_initial_state",
     "tool_definition_to_openai_schema",
     "RunStepRecorder",
+    "AgentRuntime",
+    "AgentRuntimeResult",
+    "RunStatistics",
 ]
