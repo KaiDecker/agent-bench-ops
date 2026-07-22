@@ -1,10 +1,12 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any, Literal
 
 from langchain_core.messages import BaseMessage
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -18,7 +20,10 @@ from app.agent.serialization import (
     json_safe,
     serialize_messages,
 )
-from app.agent.state import build_initial_state
+from app.agent.state import (
+    AgentState,
+    build_initial_state,
+)
 from app.benchmark.reset import reset_business_state
 from app.benchmark.schemas import BusinessInitialState
 from app.persistence.database import AsyncSessionFactory
@@ -30,6 +35,11 @@ from app.persistence.platform_models import (
 )
 from app.tools.gateway import ToolGateway
 from app.tools.registry import ToolRegistry
+
+type CheckpointerFactory = Callable[
+    [],
+    AbstractAsyncContextManager[BaseCheckpointSaver],
+]
 
 type RuntimeStatus = Literal[
     "succeeded",
@@ -49,6 +59,7 @@ class PreparedAgentRun:
     available_tools: tuple[str, ...]
     max_steps: int
     max_tool_calls: int
+    checkpoint_ref: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +82,7 @@ class AgentRuntimeResult:
     """统一 Runtime 返回结果。"""
 
     run_id: str
+    checkpoint_ref: str | None
     task_key: str
     task_version: int
     model_provider: str
@@ -110,6 +122,7 @@ class AgentRuntimeResult:
             "final_response": self.final_response,
             "error": json_safe(self.error),
             "messages": serialize_messages(list(self.messages)),
+            "checkpoint_ref": self.checkpoint_ref,
         }
 
 
@@ -136,6 +149,7 @@ class AgentRuntime:
         registry: ToolRegistry,
         gateway: ToolGateway,
         session_factory: async_sessionmaker[AsyncSession] = AsyncSessionFactory,
+        checkpointer_factory: CheckpointerFactory | None = None,
     ) -> None:
         normalized_provider = model_provider.strip()
         normalized_model_name = model_name.strip()
@@ -149,16 +163,12 @@ class AgentRuntime:
         self._model_provider = normalized_provider
         self._model_name = normalized_model_name
         self._session_factory = session_factory
+        self._model = model
+        self._registry = registry
+        self._gateway = gateway
+        self._checkpointer_factory = checkpointer_factory
 
         self._recorder = RunStepRecorder(session_factory=session_factory)
-
-        self._graph = build_agent_graph(
-            model=model,
-            registry=registry,
-            gateway=gateway,
-            session_factory=session_factory,
-            recorder=self._recorder,
-        )
 
     async def run_benchmark_task(
         self,
@@ -216,11 +226,18 @@ class AgentRuntime:
         started_at = perf_counter()
 
         try:
-            graph_result = await self._graph.ainvoke(
-                initial_state,
-                config={
-                    "recursion_limit": (resolved_recursion_limit),
-                },
+            graph_config: dict[str, Any] = {
+                "recursion_limit": resolved_recursion_limit,
+            }
+
+            if prepared.checkpoint_ref is not None:
+                graph_config["configurable"] = {
+                    "thread_id": prepared.checkpoint_ref,
+                }
+
+            graph_result = await self._invoke_graph(
+                initial_state=initial_state,
+                config=graph_config,
             )
         except Exception as exc:
             latency_ms = round(
@@ -265,6 +282,7 @@ class AgentRuntime:
 
         return AgentRuntimeResult(
             run_id=prepared.run_id,
+            checkpoint_ref=prepared.checkpoint_ref,
             task_key=prepared.task_key,
             task_version=prepared.task_version,
             model_provider=self._model_provider,
@@ -337,13 +355,18 @@ class AgentRuntime:
 
             run_id = generate_id()
 
+            checkpoint_ref = run_id if self._checkpointer_factory is not None else None
+
             runtime_configuration = {
-                "runtime_version": "stage5c-v1",
                 **dict(configuration or {}),
+                "runtime_version": "stage5d-v1",
+                "checkpoint_enabled": (checkpoint_ref is not None),
+                "checkpoint_thread_id": checkpoint_ref,
             }
 
             run = AgentRun(
                 id=run_id,
+                checkpoint_ref=checkpoint_ref,
                 task_id=task.id,
                 experiment_id=experiment_id,
                 status="running",
@@ -373,6 +396,7 @@ class AgentRuntime:
 
             return PreparedAgentRun(
                 run_id=run_id,
+                checkpoint_ref=checkpoint_ref,
                 task_id=task.id,
                 task_key=task.task_key,
                 task_version=task.version,
@@ -532,6 +556,46 @@ class AgentRuntime:
             run.error_type = type(error).__name__
             run.error_message = str(error)
             run.finished_at = datetime.now(UTC)
+
+    async def _invoke_graph(
+        self,
+        *,
+        initial_state: AgentState,
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        在 Checkpointer 资源有效期内编译和执行图。
+        """
+
+        if self._checkpointer_factory is None:
+            graph = build_agent_graph(
+                model=self._model,
+                registry=self._registry,
+                gateway=self._gateway,
+                session_factory=self._session_factory,
+                recorder=self._recorder,
+                checkpointer=None,
+            )
+
+            return await graph.ainvoke(
+                initial_state,
+                config=config,
+            )
+
+        async with self._checkpointer_factory() as checkpointer:
+            graph = build_agent_graph(
+                model=self._model,
+                registry=self._registry,
+                gateway=self._gateway,
+                session_factory=self._session_factory,
+                recorder=self._recorder,
+                checkpointer=checkpointer,
+            )
+
+            return await graph.ainvoke(
+                initial_state,
+                config=config,
+            )
 
 
 __all__ = [

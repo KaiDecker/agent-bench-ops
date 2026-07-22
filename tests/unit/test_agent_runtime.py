@@ -24,6 +24,7 @@ def test_run_statistics_derives_total_tokens() -> None:
 def test_runtime_result_serializes_messages() -> None:
     result = AgentRuntimeResult(
         run_id="run_001",
+        checkpoint_ref="run_001",
         task_key="employee_lookup_001",
         task_version=1,
         model_provider="deepseek",
@@ -52,3 +53,5 @@ def test_runtime_result_serializes_messages() -> None:
 
     assert payload["messages"][0]["type"] == ("human")
     assert payload["messages"][1]["type"] == "ai"
+
+    assert payload["checkpoint_ref"] == "run_001"

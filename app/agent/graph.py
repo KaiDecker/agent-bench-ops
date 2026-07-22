@@ -3,6 +3,9 @@ from contextlib import AbstractAsyncContextManager
 from typing import Literal
 
 from langchain_core.messages import AIMessage
+from langgraph.checkpoint.base import (
+    BaseCheckpointSaver,
+)
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,6 +62,7 @@ def build_agent_graph(
     gateway: ToolExecutor,
     session_factory: SessionFactory = (AsyncSessionFactory),
     recorder: RunStepRecorderProtocol | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
 ):
     """构建并编译 Tool-Calling Agent 图。"""
 
@@ -102,4 +106,4 @@ def build_agent_graph(
         },
     )
 
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer)

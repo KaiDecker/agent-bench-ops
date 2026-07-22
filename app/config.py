@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,8 +13,16 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
 
     database_url: str = "postgresql+asyncpg://agentbench:agentbench@localhost:5432/agentbench"
+
+    # 留空时自动从 database_url 派生 Psycopg 连接地址。
+    checkpoint_database_url: str | None = None
+
     redis_url: str = "redis://localhost:6379/0"
     sql_echo: bool = False
+
+    deepseek_api_key: SecretStr | None = None
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-v4-flash"
 
     model_config = SettingsConfigDict(
         env_file=".env",

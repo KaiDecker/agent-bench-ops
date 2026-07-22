@@ -1,13 +1,91 @@
-from typing import Any
+from dataclasses import dataclass
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.benchmark.schemas import BusinessInitialState
-from app.domain.accounts import Account
-from app.domain.employees import Employee
-from app.domain.permissions import EmployeePermission, Permission
-from app.domain.tickets import Ticket
+from app.persistence.models import (
+    Account,
+    Employee,
+    EmployeePermission,
+    Permission,
+    Ticket,
+)
+from app.persistence.platform_models import ToolOperation
+
+UNRESOLVED_TOOL_OPERATION_STATUSES = (
+    "prepared",
+    "running",
+    "unknown",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class UnresolvedToolOperation:
+    operation_id: str
+    run_id: str
+    tool_name: str
+    status: str
+
+
+class BusinessStateResetBlockedError(RuntimeError):
+    """存在未决工具操作时拒绝重置业务状态。"""
+
+    def __init__(
+        self,
+        operations: list[UnresolvedToolOperation],
+    ) -> None:
+        self.operations = tuple(operations)
+
+        operation_ids = ", ".join(operation.operation_id for operation in operations)
+
+        super().__init__(
+            "Business state reset is blocked because "
+            "unresolved tool operations exist: "
+            f"{operation_ids}"
+        )
+
+
+async def assert_business_state_reset_safe(
+    session: AsyncSession,
+) -> None:
+    """
+    确认当前不存在依赖业务表进行恢复的未决操作。
+
+    PostgreSQL 下先获取 SHARE 表锁：
+    - 阻止其他事务并发插入或更新 tool_operations；
+    - 等待正在修改账本的事务结束；
+    - 在同一事务内检查状态并执行 reset。
+    """
+
+    bind = session.get_bind()
+
+    if bind.dialect.name == "postgresql":
+        await session.execute(text("LOCK TABLE tool_operations IN SHARE MODE"))
+
+    result = await session.execute(
+        select(
+            ToolOperation.operation_id,
+            ToolOperation.run_id,
+            ToolOperation.tool_name,
+            ToolOperation.status,
+        )
+        .where(ToolOperation.status.in_(UNRESOLVED_TOOL_OPERATION_STATUSES))
+        .order_by(ToolOperation.created_at)
+    )
+
+    unresolved = [
+        UnresolvedToolOperation(
+            operation_id=row.operation_id,
+            run_id=row.run_id,
+            tool_name=row.tool_name,
+            status=row.status,
+        )
+        for row in result
+    ]
+
+    if unresolved:
+        raise BusinessStateResetBlockedError(unresolved)
 
 
 async def reset_business_state(
@@ -19,6 +97,8 @@ async def reset_business_state(
 
     调用方必须负责开启数据库事务。
     """
+
+    await assert_business_state_reset_safe(session)
 
     # 按外键依赖的反方向删除。
     for model in (
@@ -43,6 +123,7 @@ async def reset_business_state(
 
     for item in state.employee_permissions:
         values = item.model_dump(exclude_none=True)
+
         employee_permissions.append(EmployeePermission(**values))
 
     session.add_all(employee_permissions)
@@ -52,138 +133,10 @@ async def reset_business_state(
     await session.flush()
 
 
-async def capture_business_state(
-    session: AsyncSession,
-) -> dict[str, list[dict[str, Any]]]:
-    """读取当前业务数据库的确定性状态快照。"""
-
-    employees = (await session.execute(select(Employee).order_by(Employee.id))).scalars().all()
-
-    accounts = (await session.execute(select(Account).order_by(Account.id))).scalars().all()
-
-    permissions = (
-        (await session.execute(select(Permission).order_by(Permission.id))).scalars().all()
-    )
-
-    employee_permissions = (
-        (
-            await session.execute(
-                select(EmployeePermission).order_by(
-                    EmployeePermission.employee_id,
-                    EmployeePermission.permission_id,
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-    tickets = (await session.execute(select(Ticket).order_by(Ticket.id))).scalars().all()
-
-    return {
-        "employees": [
-            {
-                "id": item.id,
-                "employee_no": item.employee_no,
-                "name": item.name,
-                "department": item.department,
-                "status": item.status,
-            }
-            for item in employees
-        ],
-        "accounts": [
-            {
-                "id": item.id,
-                "employee_id": item.employee_id,
-                "username": item.username,
-                "status": item.status,
-                "version": item.version,
-            }
-            for item in accounts
-        ],
-        "permissions": [
-            {
-                "id": item.id,
-                "code": item.code,
-                "name": item.name,
-                "description": item.description,
-                "risk_level": item.risk_level,
-                "requires_approval": item.requires_approval,
-            }
-            for item in permissions
-        ],
-        "employee_permissions": [
-            {
-                "employee_id": item.employee_id,
-                "permission_id": item.permission_id,
-                "status": item.status,
-                "granted_by": item.granted_by,
-                "revoked_at": (
-                    item.revoked_at.isoformat() if item.revoked_at is not None else None
-                ),
-            }
-            for item in employee_permissions
-        ],
-        "tickets": [
-            {
-                "id": item.id,
-                "requester_employee_id": item.requester_employee_id,
-                "target_employee_id": item.target_employee_id,
-                "ticket_type": item.ticket_type,
-                "status": item.status,
-                "risk_level": item.risk_level,
-                "title": item.title,
-                "description": item.description,
-                "resolution": item.resolution,
-                "version": item.version,
-            }
-            for item in tickets
-        ],
-    }
-
-
-def normalize_initial_state(
-    state: BusinessInitialState,
-) -> dict[str, list[dict[str, Any]]]:
-    """
-    将 YAML 初始状态转换为可与数据库快照比较的结构。
-
-    排除数据库自动生成的 created_at、updated_at 和 granted_at。
-    """
-
-    return {
-        "employees": sorted(
-            [item.model_dump(mode="json") for item in state.employees],
-            key=lambda item: item["id"],
-        ),
-        "accounts": sorted(
-            [item.model_dump(mode="json") for item in state.accounts],
-            key=lambda item: item["id"],
-        ),
-        "permissions": sorted(
-            [item.model_dump(mode="json") for item in state.permissions],
-            key=lambda item: item["id"],
-        ),
-        "employee_permissions": sorted(
-            [
-                {
-                    "employee_id": item.employee_id,
-                    "permission_id": item.permission_id,
-                    "status": item.status,
-                    "granted_by": item.granted_by,
-                    "revoked_at": (
-                        item.revoked_at.isoformat() if item.revoked_at is not None else None
-                    ),
-                }
-                for item in state.employee_permissions
-            ],
-            key=lambda item: (
-                item["employee_id"],
-                item["permission_id"],
-            ),
-        ),
-        "tickets": sorted(
-            [item.model_dump(mode="json") for item in state.tickets],
-            key=lambda item: item["id"],
-        ),
-    }
+__all__ = [
+    "BusinessStateResetBlockedError",
+    "UNRESOLVED_TOOL_OPERATION_STATUSES",
+    "UnresolvedToolOperation",
+    "assert_business_state_reset_safe",
+    "reset_business_state",
+]
