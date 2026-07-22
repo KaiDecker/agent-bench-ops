@@ -64,6 +64,18 @@ class PreparedAgentRun:
 
 
 @dataclass(frozen=True, slots=True)
+class PreparedResumeRun:
+    """已经取得恢复执行权的 AgentRun。"""
+
+    run_id: str
+    checkpoint_ref: str
+    task_key: str
+    task_version: int
+    previous_latency_ms: float
+    breakpoint_nodes: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class GraphInvocationOutcome:
     """一次 LangGraph 调用的结果和当前调度位置。"""
 
@@ -350,6 +362,157 @@ class AgentRuntime:
             messages=messages,
         )
 
+    async def resume_benchmark_run(
+        self,
+        *,
+        run_id: str,
+        recursion_limit: int = 12,
+    ) -> AgentRuntimeResult:
+        """
+        从 PostgreSQL checkpoint 恢复一个暂停的 AgentRun。
+
+        本方法不会创建新的 AgentRun，也不会重置 Benchmark 数据。
+        """
+
+        if self._checkpointer_factory is None:
+            raise RuntimeError("Checkpoint recovery requires a checkpointer.")
+
+        prepared = await self._claim_resume(
+            run_id=run_id,
+        )
+
+        graph_config: dict[str, Any] = {
+            "recursion_limit": recursion_limit,
+            "configurable": {
+                "thread_id": (prepared.checkpoint_ref),
+            },
+        }
+
+        started_at = perf_counter()
+
+        try:
+            outcome = await self._invoke_graph(
+                initial_state=None,
+                config=graph_config,
+                interrupt_before=(prepared.breakpoint_nodes),
+            )
+
+            graph_result = outcome.state
+        except Exception as exc:
+            segment_latency_ms = round(
+                (perf_counter() - started_at) * 1000,
+                2,
+            )
+
+            total_latency_ms = round(
+                prepared.previous_latency_ms + segment_latency_ms,
+                2,
+            )
+
+            await self._finalize_exception(
+                run_id=prepared.run_id,
+                error=exc,
+                latency_ms=total_latency_ms,
+            )
+
+            raise
+
+        segment_latency_ms = round(
+            (perf_counter() - started_at) * 1000,
+            2,
+        )
+
+        total_latency_ms = round(
+            prepared.previous_latency_ms + segment_latency_ms,
+            2,
+        )
+
+        error = graph_result.get("error")
+
+        status: RuntimeStatus = "failed" if error is not None else "succeeded"
+
+        total_steps = int(
+            graph_result.get(
+                "step_count",
+                0,
+            )
+        )
+
+        total_tool_calls = int(
+            graph_result.get(
+                "tool_call_count",
+                0,
+            )
+        )
+
+        final_response = graph_result.get("final_response")
+
+        messages = tuple(
+            graph_result.get(
+                "messages",
+                [],
+            )
+        )
+
+        if outcome.is_paused:
+            statistics = await self._record_pause(
+                run_id=prepared.run_id,
+                total_steps=total_steps,
+                total_tool_calls=total_tool_calls,
+                latency_ms=total_latency_ms,
+                next_nodes=outcome.next_nodes,
+            )
+
+            return AgentRuntimeResult(
+                run_id=prepared.run_id,
+                checkpoint_ref=(prepared.checkpoint_ref),
+                task_key=prepared.task_key,
+                task_version=(prepared.task_version),
+                model_provider=(self._model_provider),
+                model_name=self._model_name,
+                status="paused",
+                next_nodes=outcome.next_nodes,
+                total_steps=total_steps,
+                total_tool_calls=total_tool_calls,
+                persisted_step_count=(statistics.persisted_step_count),
+                input_tokens=(statistics.input_tokens),
+                output_tokens=(statistics.output_tokens),
+                latency_ms=total_latency_ms,
+                final_response=None,
+                error=None,
+                messages=messages,
+            )
+
+        statistics = await self._finalize_result(
+            run_id=prepared.run_id,
+            status=status,
+            total_steps=total_steps,
+            total_tool_calls=total_tool_calls,
+            latency_ms=total_latency_ms,
+            final_response=final_response,
+            error=error,
+        )
+
+        return AgentRuntimeResult(
+            run_id=prepared.run_id,
+            checkpoint_ref=(prepared.checkpoint_ref),
+            task_key=prepared.task_key,
+            task_version=prepared.task_version,
+            model_provider=self._model_provider,
+            model_name=self._model_name,
+            status=status,
+            next_nodes=outcome.next_nodes,
+            total_steps=total_steps,
+            total_tool_calls=total_tool_calls,
+            persisted_step_count=(statistics.persisted_step_count),
+            input_tokens=statistics.input_tokens,
+            output_tokens=statistics.output_tokens,
+            latency_ms=total_latency_ms,
+            final_response=final_response,
+            error=json_safe(error),
+            messages=messages,
+        )
+
     async def _prepare_run(
         self,
         *,
@@ -575,6 +738,29 @@ class AgentRuntime:
                 run.error_type = None
                 run.error_message = None
 
+            configuration = dict(run.configuration or {})
+
+            if "paused" in configuration or "resume_in_progress" in configuration:
+                configuration.pop(
+                    "resume_started_at",
+                    None,
+                )
+                configuration.pop(
+                    "pause_reason",
+                    None,
+                )
+
+                configuration.update(
+                    {
+                        "paused": False,
+                        "next_nodes": [],
+                        "resume_in_progress": False,
+                        "resume_status": ("completed" if status == "succeeded" else "failed"),
+                    }
+                )
+
+                run.configuration = configuration
+
             run.finished_at = datetime.now(UTC)
 
             return statistics
@@ -612,14 +798,119 @@ class AgentRuntime:
             run.error_message = None
             run.finished_at = None
 
+            configuration = dict(run.configuration or {})
+
+            configuration.pop(
+                "resume_started_at",
+                None,
+            )
+
             run.configuration = {
-                **dict(run.configuration or {}),
+                **configuration,
                 "paused": True,
-                "pause_reason": ("static_breakpoint"),
+                "pause_reason": "static_breakpoint",
                 "next_nodes": list(next_nodes),
+                "resume_in_progress": False,
+                "resume_status": "paused",
             }
 
             return statistics
+
+    async def _claim_resume(
+        self,
+        *,
+        run_id: str,
+    ) -> PreparedResumeRun:
+        """
+        原子取得一个暂停运行的恢复执行权。
+
+        数据库行锁用于保证两个进程不能同时声明同一个恢复任务；
+        resume_in_progress 用于在事务提交后继续阻止重复恢复。
+        """
+
+        async with self._session_factory.begin() as session:
+            run = await self._lock_run(
+                session,
+                run_id=run_id,
+            )
+
+            if run.status != "running":
+                raise RuntimeError(
+                    f"Only running AgentRuns can be resumed: run_id={run_id}, status={run.status}"
+                )
+
+            if run.checkpoint_ref is None:
+                raise RuntimeError(f"AgentRun has no checkpoint_ref: {run_id}")
+
+            configuration = dict(run.configuration or {})
+
+            if not configuration.get(
+                "paused",
+                False,
+            ):
+                raise RuntimeError(f"AgentRun is not marked as paused: {run_id}")
+
+            if configuration.get(
+                "resume_in_progress",
+                False,
+            ):
+                raise RuntimeError(f"AgentRun resume is already in progress: {run_id}")
+
+            if run.model_provider != self._model_provider:
+                raise RuntimeError(
+                    "Runtime model provider does not match "
+                    "the paused AgentRun: "
+                    f"expected={run.model_provider}, "
+                    f"actual={self._model_provider}"
+                )
+
+            if run.model_name != self._model_name:
+                raise RuntimeError(
+                    "Runtime model name does not match "
+                    "the paused AgentRun: "
+                    f"expected={run.model_name}, "
+                    f"actual={self._model_name}"
+                )
+
+            task = await session.get(
+                BenchmarkTask,
+                run.task_id,
+            )
+
+            if task is None:
+                raise RuntimeError(f"BenchmarkTask does not exist for AgentRun: {run_id}")
+
+            breakpoint_nodes = tuple(
+                str(node)
+                for node in configuration.get(
+                    "next_nodes",
+                    [],
+                )
+            )
+
+            if not breakpoint_nodes:
+                raise RuntimeError(f"Paused AgentRun has no pending nodes: {run_id}")
+
+            run.resume_count = int(run.resume_count or 0) + 1
+
+            run.configuration = {
+                **configuration,
+                "paused": False,
+                "resume_in_progress": True,
+                "resume_status": "in_progress",
+                "resume_started_at": (datetime.now(UTC).isoformat()),
+            }
+
+            await session.flush()
+
+            return PreparedResumeRun(
+                run_id=run.id,
+                checkpoint_ref=run.checkpoint_ref,
+                task_key=task.task_key,
+                task_version=task.version,
+                previous_latency_ms=float(run.latency_ms or 0.0),
+                breakpoint_nodes=breakpoint_nodes,
+            )
 
     async def _finalize_exception(
         self,
@@ -648,6 +939,26 @@ class AgentRuntime:
             run.final_response = None
             run.error_type = type(error).__name__
             run.error_message = str(error)
+
+            configuration = dict(run.configuration or {})
+
+            if "paused" in configuration or "resume_in_progress" in configuration:
+                configuration.pop(
+                    "resume_started_at",
+                    None,
+                )
+
+                configuration.update(
+                    {
+                        "paused": False,
+                        "next_nodes": [],
+                        "resume_in_progress": False,
+                        "resume_status": "failed",
+                    }
+                )
+
+                run.configuration = configuration
+
             run.finished_at = datetime.now(UTC)
 
     async def _invoke_graph(
