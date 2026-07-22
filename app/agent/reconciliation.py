@@ -1,4 +1,7 @@
-from collections.abc import Collection
+from collections.abc import (
+    Collection,
+    Mapping,
+)
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -19,6 +22,7 @@ type ReconciliationAction = Literal[
     "close_stale",
     "close_inconclusive",
     "retain_checkpoint",
+    "release_resume_claim",
     "manual_review",
 ]
 
@@ -30,6 +34,25 @@ UNRESOLVED_OPERATION_STATUSES = frozenset(
         "unknown",
     }
 )
+
+
+def parse_resume_started_at(
+    value: Any,
+) -> datetime | None:
+    """解析 configuration.resume_started_at。"""
+
+    if not isinstance(value, str):
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        return None
+
+    return parsed.astimezone(UTC)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,10 +78,54 @@ def classify_stale_run(
     checkpoint_ref: str | None,
     unresolved_operations: Collection[ToolOperation],
     inconclusive_operation_ids: Collection[str],
+    configuration: Mapping[
+        str,
+        Any,
+    ]
+    | None = None,
+    resume_claim_cutoff: datetime | None = None,
 ) -> ReconciliationAction:
     """对 stale running AgentRun 做保守分类。"""
 
     if checkpoint_ref:
+        runtime_configuration = dict(configuration or {})
+
+        resume_in_progress = (
+            runtime_configuration.get(
+                "resume_in_progress",
+                False,
+            )
+            is True
+        )
+
+        if not resume_in_progress:
+            return "retain_checkpoint"
+
+        # 未要求检查恢复租约时保持原有行为。
+        if resume_claim_cutoff is None:
+            return "retain_checkpoint"
+
+        resume_started_at = parse_resume_started_at(runtime_configuration.get("resume_started_at"))
+
+        # 缺失或非法的租约时间不能自动释放。
+        if resume_started_at is None:
+            return "manual_review"
+
+        pending_nodes = runtime_configuration.get("next_nodes")
+
+        # 没有待执行节点时，不能安全恢复。
+        if (
+            not isinstance(
+                pending_nodes,
+                list,
+            )
+            or not pending_nodes
+        ):
+            return "manual_review"
+
+        if resume_started_at <= resume_claim_cutoff:
+            return "release_resume_claim"
+
         return "retain_checkpoint"
 
     if not unresolved_operations:
@@ -92,6 +159,7 @@ class StaleRunReconciler:
         older_than: timedelta,
         apply: bool,
         inconclusive_operation_ids: Collection[str] = (),
+        run_ids: Collection[str] = (),
     ) -> list[ReconciliationResult]:
         if older_than.total_seconds() <= 0:
             raise ValueError("older_than must be positive")
@@ -99,15 +167,21 @@ class StaleRunReconciler:
         cutoff = datetime.now(UTC) - older_than
         forced_ids = set(inconclusive_operation_ids)
 
+        normalized_run_ids = tuple(sorted({run_id.strip() for run_id in run_ids if run_id.strip()}))
+
+        if run_ids and not normalized_run_ids:
+            raise ValueError("run_ids must contain at least one non-empty run ID")
+
         async with self._session_factory.begin() as session:
-            statement = (
-                select(AgentRun)
-                .where(
-                    AgentRun.status == "running",
-                    AgentRun.created_at < cutoff,
-                )
-                .order_by(AgentRun.created_at)
+            statement = select(AgentRun).where(
+                AgentRun.status == "running",
+                AgentRun.created_at < cutoff,
             )
+
+            if normalized_run_ids:
+                statement = statement.where(AgentRun.id.in_(normalized_run_ids))
+
+            statement = statement.order_by(AgentRun.created_at)
 
             if apply:
                 statement = statement.with_for_update()
@@ -132,7 +206,9 @@ class StaleRunReconciler:
                 action = classify_stale_run(
                     checkpoint_ref=run.checkpoint_ref,
                     unresolved_operations=operations,
-                    inconclusive_operation_ids=forced_ids,
+                    inconclusive_operation_ids=(forced_ids),
+                    configuration=run.configuration,
+                    resume_claim_cutoff=cutoff,
                 )
 
                 reason = self._reason_for_action(
@@ -156,6 +232,7 @@ class StaleRunReconciler:
                             in {
                                 "close_stale",
                                 "close_inconclusive",
+                                "release_resume_claim",
                             }
                         ),
                         unresolved_operations=tuple(
@@ -180,10 +257,11 @@ class StaleRunReconciler:
                 "the tool side effect committed."
             ),
             "retain_checkpoint": ("A checkpoint reference exists and the run may be resumable."),
+            "release_resume_claim": (
+                "The checkpoint is resumable, but the previous resume ownership claim has expired."
+            ),
             "manual_review": (
-                "The run has unresolved operations that "
-                "were not explicitly approved for "
-                "inconclusive reconciliation."
+                "The run has unresolved state that cannot be reconciled automatically."
             ),
         }
 
@@ -197,6 +275,27 @@ class StaleRunReconciler:
         action: ReconciliationAction,
     ) -> None:
         now = datetime.now(UTC)
+
+        if action == "release_resume_claim":
+            configuration = dict(run.configuration or {})
+
+            configuration.pop(
+                "resume_started_at",
+                None,
+            )
+
+            configuration.update(
+                {
+                    "paused": True,
+                    "resume_in_progress": False,
+                    "resume_status": "paused",
+                    "pause_reason": ("resume_claim_expired"),
+                }
+            )
+
+            run.configuration = configuration
+            run.finished_at = None
+            return
 
         if action == "close_stale":
             run.status = "failed"
