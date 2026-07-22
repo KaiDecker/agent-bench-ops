@@ -153,6 +153,53 @@ class AgentRuntimeResult:
         }
 
 
+def validate_resume_configuration(
+    *,
+    run_id: str,
+    configuration: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """
+    校验 AgentRun 是否处于可恢复状态，并返回待执行节点。
+
+    resume_in_progress 优先于 paused 检查，使并发恢复请求
+    能得到准确的冲突原因。
+    """
+
+    if (
+        configuration.get(
+            "resume_in_progress",
+            False,
+        )
+        is True
+    ):
+        raise RuntimeError(f"AgentRun resume is already in progress: {run_id}")
+
+    if (
+        configuration.get(
+            "paused",
+            False,
+        )
+        is not True
+    ):
+        raise RuntimeError(f"AgentRun is not marked as paused: {run_id}")
+
+    raw_nodes = configuration.get("next_nodes")
+
+    if (
+        not isinstance(
+            raw_nodes,
+            list,
+        )
+        or not raw_nodes
+    ):
+        raise RuntimeError(f"Paused AgentRun has no pending nodes: {run_id}")
+
+    if not all(isinstance(node, str) and bool(node.strip()) for node in raw_nodes):
+        raise RuntimeError(f"Paused AgentRun contains invalid pending nodes: {run_id}")
+
+    return tuple(node.strip() for node in raw_nodes)
+
+
 class AgentRuntime:
     """
     Benchmark Agent 的统一运行入口。
@@ -844,17 +891,10 @@ class AgentRuntime:
 
             configuration = dict(run.configuration or {})
 
-            if not configuration.get(
-                "paused",
-                False,
-            ):
-                raise RuntimeError(f"AgentRun is not marked as paused: {run_id}")
-
-            if configuration.get(
-                "resume_in_progress",
-                False,
-            ):
-                raise RuntimeError(f"AgentRun resume is already in progress: {run_id}")
+            breakpoint_nodes = validate_resume_configuration(
+                run_id=run_id,
+                configuration=configuration,
+            )
 
             if run.model_provider != self._model_provider:
                 raise RuntimeError(
@@ -879,17 +919,6 @@ class AgentRuntime:
 
             if task is None:
                 raise RuntimeError(f"BenchmarkTask does not exist for AgentRun: {run_id}")
-
-            breakpoint_nodes = tuple(
-                str(node)
-                for node in configuration.get(
-                    "next_nodes",
-                    [],
-                )
-            )
-
-            if not breakpoint_nodes:
-                raise RuntimeError(f"Paused AgentRun has no pending nodes: {run_id}")
 
             run.resume_count = int(run.resume_count or 0) + 1
 
@@ -1023,7 +1052,9 @@ class AgentRuntime:
 __all__ = [
     "AgentRuntime",
     "AgentRuntimeResult",
-    "PreparedAgentRun",
-    "RunStatistics",
     "GraphInvocationOutcome",
+    "PreparedAgentRun",
+    "PreparedResumeRun",
+    "RunStatistics",
+    "validate_resume_configuration",
 ]
