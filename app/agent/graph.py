@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from typing import Literal
 
@@ -63,6 +63,7 @@ def build_agent_graph(
     session_factory: SessionFactory = (AsyncSessionFactory),
     recorder: RunStepRecorderProtocol | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
+    interrupt_before: Sequence[str] | None = None,
 ):
     """构建并编译 Tool-Calling Agent 图。"""
 
@@ -106,4 +107,7 @@ def build_agent_graph(
         },
     )
 
-    return builder.compile(checkpointer=checkpointer)
+    return builder.compile(
+        checkpointer=checkpointer,
+        interrupt_before=(list(interrupt_before) if interrupt_before else None),
+    )

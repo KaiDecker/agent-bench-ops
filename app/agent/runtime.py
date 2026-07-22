@@ -42,6 +42,7 @@ type CheckpointerFactory = Callable[
 ]
 
 type RuntimeStatus = Literal[
+    "paused",
     "succeeded",
     "failed",
 ]
@@ -60,6 +61,18 @@ class PreparedAgentRun:
     max_steps: int
     max_tool_calls: int
     checkpoint_ref: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class GraphInvocationOutcome:
+    """一次 LangGraph 调用的结果和当前调度位置。"""
+
+    state: dict[str, Any]
+    next_nodes: tuple[str, ...]
+
+    @property
+    def is_paused(self) -> bool:
+        return bool(self.next_nodes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +101,7 @@ class AgentRuntimeResult:
     model_provider: str
     model_name: str
     status: RuntimeStatus
+    next_nodes: tuple[str, ...]
     total_steps: int
     total_tool_calls: int
     persisted_step_count: int
@@ -112,6 +126,7 @@ class AgentRuntimeResult:
             "model_provider": self.model_provider,
             "model_name": self.model_name,
             "status": self.status,
+            "next_nodes": list(self.next_nodes),
             "total_steps": self.total_steps,
             "total_tool_calls": self.total_tool_calls,
             "persisted_step_count": (self.persisted_step_count),
@@ -184,6 +199,7 @@ class AgentRuntime:
         random_seed: int | None = None,
         configuration: Mapping[str, Any] | None = None,
         recursion_limit: int | None = None,
+        pause_before_tools: bool = False,
     ) -> AgentRuntimeResult:
         """
         重置并执行一个 Benchmark Task。
@@ -235,10 +251,13 @@ class AgentRuntime:
                     "thread_id": prepared.checkpoint_ref,
                 }
 
-            graph_result = await self._invoke_graph(
+            outcome = await self._invoke_graph(
                 initial_state=initial_state,
                 config=graph_config,
+                interrupt_before=(("tools",) if pause_before_tools else None),
             )
+
+            graph_result = outcome.state
         except Exception as exc:
             latency_ms = round(
                 (perf_counter() - started_at) * 1000,
@@ -268,6 +287,37 @@ class AgentRuntime:
 
         final_response = graph_result.get("final_response")
 
+        if outcome.is_paused:
+            statistics = await self._record_pause(
+                run_id=prepared.run_id,
+                total_steps=total_steps,
+                total_tool_calls=total_tool_calls,
+                latency_ms=latency_ms,
+                next_nodes=outcome.next_nodes,
+            )
+
+            messages = tuple(graph_result.get("messages", []))
+
+            return AgentRuntimeResult(
+                run_id=prepared.run_id,
+                checkpoint_ref=prepared.checkpoint_ref,
+                task_key=prepared.task_key,
+                task_version=prepared.task_version,
+                model_provider=self._model_provider,
+                model_name=self._model_name,
+                status="paused",
+                next_nodes=outcome.next_nodes,
+                total_steps=total_steps,
+                total_tool_calls=total_tool_calls,
+                persisted_step_count=(statistics.persisted_step_count),
+                input_tokens=statistics.input_tokens,
+                output_tokens=statistics.output_tokens,
+                latency_ms=latency_ms,
+                final_response=None,
+                error=None,
+                messages=messages,
+            )
+
         statistics = await self._finalize_result(
             run_id=prepared.run_id,
             status=status,
@@ -288,6 +338,7 @@ class AgentRuntime:
             model_provider=self._model_provider,
             model_name=self._model_name,
             status=status,
+            next_nodes=outcome.next_nodes,
             total_steps=total_steps,
             total_tool_calls=total_tool_calls,
             persisted_step_count=(statistics.persisted_step_count),
@@ -528,6 +579,48 @@ class AgentRuntime:
 
             return statistics
 
+    async def _record_pause(
+        self,
+        *,
+        run_id: str,
+        total_steps: int,
+        total_tool_calls: int,
+        latency_ms: float,
+        next_nodes: tuple[str, ...],
+    ) -> RunStatistics:
+        """保存暂停时已经完成的部分运行统计。"""
+
+        async with self._session_factory.begin() as session:
+            run = await self._lock_run(
+                session,
+                run_id=run_id,
+            )
+
+            statistics = await self._read_statistics(
+                session,
+                run_id=run_id,
+            )
+
+            run.status = "running"
+            run.total_steps = total_steps
+            run.total_tool_calls = total_tool_calls
+            run.input_tokens = statistics.input_tokens
+            run.output_tokens = statistics.output_tokens
+            run.latency_ms = latency_ms
+            run.final_response = None
+            run.error_type = None
+            run.error_message = None
+            run.finished_at = None
+
+            run.configuration = {
+                **dict(run.configuration or {}),
+                "paused": True,
+                "pause_reason": ("static_breakpoint"),
+                "next_nodes": list(next_nodes),
+            }
+
+            return statistics
+
     async def _finalize_exception(
         self,
         *,
@@ -560,12 +653,16 @@ class AgentRuntime:
     async def _invoke_graph(
         self,
         *,
-        initial_state: AgentState,
+        initial_state: AgentState | None,
         config: dict[str, Any],
-    ) -> dict[str, Any]:
+        interrupt_before: Sequence[str] | None = None,
+    ) -> GraphInvocationOutcome:
         """
-        在 Checkpointer 资源有效期内编译和执行图。
+        在 Checkpointer 资源有效期内编译、执行并读取图状态。
         """
+
+        if interrupt_before and self._checkpointer_factory is None:
+            raise ValueError("Graph breakpoints require a checkpointer.")
 
         if self._checkpointer_factory is None:
             graph = build_agent_graph(
@@ -575,11 +672,17 @@ class AgentRuntime:
                 session_factory=self._session_factory,
                 recorder=self._recorder,
                 checkpointer=None,
+                interrupt_before=None,
             )
 
-            return await graph.ainvoke(
+            state = await graph.ainvoke(
                 initial_state,
                 config=config,
+            )
+
+            return GraphInvocationOutcome(
+                state=state,
+                next_nodes=(),
             )
 
         async with self._checkpointer_factory() as checkpointer:
@@ -590,11 +693,19 @@ class AgentRuntime:
                 session_factory=self._session_factory,
                 recorder=self._recorder,
                 checkpointer=checkpointer,
+                interrupt_before=interrupt_before,
             )
 
-            return await graph.ainvoke(
+            state = await graph.ainvoke(
                 initial_state,
                 config=config,
+            )
+
+            snapshot = await graph.aget_state(config)
+
+            return GraphInvocationOutcome(
+                state=state,
+                next_nodes=tuple(snapshot.next),
             )
 
 
@@ -603,4 +714,5 @@ __all__ = [
     "AgentRuntimeResult",
     "PreparedAgentRun",
     "RunStatistics",
+    "GraphInvocationOutcome",
 ]

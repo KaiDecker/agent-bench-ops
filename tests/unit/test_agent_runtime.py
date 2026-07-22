@@ -5,8 +5,20 @@ from langchain_core.messages import (
 
 from app.agent.runtime import (
     AgentRuntimeResult,
+    GraphInvocationOutcome,
     RunStatistics,
 )
+
+
+def test_graph_outcome_detects_pause() -> None:
+    outcome = GraphInvocationOutcome(
+        state={
+            "step_count": 1,
+        },
+        next_nodes=("tools",),
+    )
+
+    assert outcome.is_paused is True
 
 
 def test_run_statistics_derives_total_tokens() -> None:
@@ -30,6 +42,7 @@ def test_runtime_result_serializes_messages() -> None:
         model_provider="deepseek",
         model_name="deepseek-v4-flash",
         status="succeeded",
+        next_nodes=(),
         total_steps=2,
         total_tool_calls=1,
         persisted_step_count=3,
@@ -55,3 +68,4 @@ def test_runtime_result_serializes_messages() -> None:
     assert payload["messages"][1]["type"] == "ai"
 
     assert payload["checkpoint_ref"] == "run_001"
+    assert payload["next_nodes"] == []
