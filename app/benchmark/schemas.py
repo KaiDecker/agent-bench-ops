@@ -9,6 +9,12 @@ from pydantic import (
     model_validator,
 )
 
+from app.evaluation.rules import (
+    StateExpectation,
+    TemporalRule,
+    TraceEventRule,
+)
+
 
 class EmployeeSeed(BaseModel):
     """员工初始数据。"""
@@ -213,10 +219,20 @@ class BenchmarkTaskSpec(BaseModel):
     initial_state: BusinessInitialState = Field(default_factory=BusinessInitialState)
     available_tools: list[str] = Field(default_factory=list)
 
-    expected_state: list[dict[str, Any]] = Field(default_factory=list)
-    required_events: list[dict[str, Any]] = Field(default_factory=list)
-    forbidden_events: list[dict[str, Any]] = Field(default_factory=list)
-    temporal_rules: list[dict[str, Any]] = Field(default_factory=list)
+    expected_state: list[StateExpectation] = Field(
+        default_factory=list,
+    )
+
+    required_events: list[TraceEventRule] = Field(
+        default_factory=list,
+    )
+
+    forbidden_events: list[TraceEventRule] = Field(
+        default_factory=list,
+    )
+    temporal_rules: list[TemporalRule] = Field(
+        default_factory=list,
+    )
 
     budget: TaskBudget = Field(default_factory=TaskBudget)
     metadata: dict[str, Any] = Field(default_factory=dict)
