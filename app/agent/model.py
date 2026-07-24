@@ -287,3 +287,38 @@ class ScriptedCreateTicketModel:
         return AIMessage(
             content=(f"工单 {ticket_id} 已创建，标题为“{title}”，当前状态为 {status}。")
         )
+
+
+class ScriptedBenchmarkModel:
+    """
+    阶段 7 使用的确定性多任务离线模型。
+
+    根据当前 Benchmark Task 暴露的工具集合，
+    将调用路由给对应的确定性模型。
+    """
+
+    def __init__(self) -> None:
+        self._employee_lookup_model = ScriptedEmployeeLookupModel()
+        self._create_ticket_model = ScriptedCreateTicketModel()
+
+    async def ainvoke(
+        self,
+        *,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[ToolDefinition],
+    ) -> AIMessage:
+        tool_names = {tool.metadata.name for tool in tools}
+
+        if "create_ticket" in tool_names:
+            return await self._create_ticket_model.ainvoke(
+                messages=messages,
+                tools=tools,
+            )
+
+        if "get_employee" in tool_names:
+            return await self._employee_lookup_model.ainvoke(
+                messages=messages,
+                tools=tools,
+            )
+
+        return AIMessage(content=("当前任务没有提供该离线模型支持的工具，无法继续执行。"))
